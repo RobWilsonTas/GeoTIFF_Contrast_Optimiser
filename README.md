@@ -12,7 +12,7 @@ The script first splits the original tif into tiles
 
 Then for each tile it will determine various attributes of the raster such as local minimum, maximum, range and midrange values, as well as shadow likelihood
 
-With these attributes the algorithm estimates how far it can stretch the values of the pixels to enhance contrast without clipping the values
+With these attributes the algorithm estimates how far it can stretch the values of the surrounding pixels to enhance contrast without clipping the values
 
 Then it applies the stretch to the tiles, before putting them all back together
 
