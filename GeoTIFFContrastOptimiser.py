@@ -17,21 +17,60 @@ User options for the tiling section
 
 #Initial variable assignment
 rootProcessDirectory    = 'C:/Temp/' #E.g 'C:/Temp/'
-inImage                 = 'C:/Temp/3BandVrtRenderedReprojClip.tif' #E.g 'C:/Temp/BigImage.tif'
-approxPixelsPerTile     = 2000 #E.g 12000, this will vary based on your ram
+inImage                 = 'C:/Temp/YourImage.tif' #E.g 'C:/Temp/BigImage.tif'
+approxPixelsPerTile     = 12000 #E.g 12000, this will vary based on your ram
 
 #Options for compressing the images, ZSTD gives the best speed but LZW allows you to view the thumbnail in windows explorer
 compressOptions = 'COMPRESS=ZSTD|NUM_THREADS=ALL_CPUS|PREDICTOR=1|ZSTD_LEVEL=1|BIGTIFF=IF_SAFER|TILED=YES'
 finalCompressOptions = 'COMPRESS=LZW|PREDICTOR=1|NUM_THREADS=ALL_CPUS|BIGTIFF=IF_SAFER|TILED=YES'
 gdalOptions = '--config GDAL_NUM_THREADS ALL_CPUS -overwrite'
 
-#!!!
-#There is another section of options lower down for the sharpening section
-#!!!
+
+"""
+#############################################################
+User options for the sharpening section (common values for speedUp and radius: 7SUP & 3RM & 4SBWM for 10cm,   7SUP & 8RM & 10SBWM for 25cm,    2SUP & 80RM & 50SBWM for 10m)
+"""
+
+
+speedUpFactor               = 8 #Between 1 and 1000, recommended is perhaps 10 to start off with  
+#This reduces the raster resolution for determining minimum and maximum values
+#If the speed up factor is too high, it will overlook smaller bright/dark sections and clip their values
+#If the speed up factor is too low, it can be too granular/zealous in preventing pixel value clipping, 
+#Plus it can make processing times very long (keep an eye on the console output for this)
+#Though as long as it isn't below 5 it likely won't be a real issue on performance
+
+radiusMetres                = 7 #At least 3 times greater than the original pixel size, also must be an integer
+#This parameter has a strong effect on the output
+#A smaller radius creates more extreme, spatially variable contrast enhancement
+#A larger radius is a more gentle, broader brush
+
+toneShiftFactor             = 0.9 #Between 0.1 and 1, recommended is 0.9
+#If broader darker areas are getting brightened too much (or vice versa for bright areas), 
+#or low contrast areas are having their contrast bumped up too high then you can decrease this value
+#Alternatively if you want to really brighten up dark areas you can increase this to 0.95 or even 1
+
+maxPixelChangeFactor        = 0.3 #Between 0.1 and 1, recommended is 0.3
+#If harsh edges are appearing where some areas are pushed too far towards black or white,
+#then you can decrease this value
+
+clippingPreventionFactor    = 0.05 #Between 0 and 0.9, recommended is 0.05
+#If the full stretch of pixels is getting stretched too far into complete blackness/whiteness,
+#despite a low speed up factor, then you can increase this value a little
+
+shadowBoostWidthMetres      = 4.0 #Must be larger than approximately 3 times the pixel size times the speed up factor
+#This sets a very approximate minimum width of the shadowed areas to be boosted
+
+shadowBoostFactor           = 0.4 #Between 0 and 1, recommended is 0.4
+
+
+#Keep in mind this script only adjusts brightnesses. A tinted image will affect results.
+#If you have an image with a significant coloured tint then it is best to first render out a new version
+#that has the 3 bands individually stretched such that the tint is as removed as it can be
 
 
 """
-##########################################################
+#######################################################################
+#######################################################################
 """
 
 #Set up the layer name for the raster calculations
@@ -53,8 +92,7 @@ finalImageDir                   = processDirectoryInstance + '6Final/'
 inImageTileDir = processTileDirectory
 
 #Creating all the subfolders
-
-if not os.path.exists(processDirectoryInstance): os.mkdir(processDirectoryInstance) 
+if not os.path.exists(processDirectoryInstance):os.mkdir(processDirectoryInstance) 
 if not os.path.exists(processDirectory):        os.mkdir(processDirectory)
 if not os.path.exists(otherDirectory):          os.mkdir(otherDirectory)
 if not os.path.exists(processBoundsDirectory):  os.mkdir(processBoundsDirectory)
@@ -121,7 +159,7 @@ if promptReply == QMessageBox.Yes:
     blueMin = getStats(processDirectory + inImageName + 'BlueStats.html')[1]
 
     #Check to see if anything is a bit sus
-    if abs(redMean - greenMean) + abs(redMean - blueMean) + abs(blueMean - greenMean) > 8 or abs(redMin - greenMin) + abs(redMin - blueMin) + abs(blueMin - greenMin) > 15:
+    if abs(redMean - greenMean) + abs(redMean - blueMean) + abs(blueMean - greenMean) > 20 or abs(redMin - greenMin) + abs(redMin - blueMin) + abs(blueMin - greenMin) > 30:
         promptReply = QMessageBox.question(iface.mainWindow(), 'Check the RGB values',"Your image may have a significant tint.\nRGB mean is " + str(redMean) + ', ' + str(greenMean) + ', ' + str(blueMean) + '.\nRGB min is ' + str(redMin) + ', ' + str(greenMin) + ', ' + str(blueMin) + '.\nDo you wish to continue?', QMessageBox.Yes, QMessageBox.No)
         if promptReply == QMessageBox.No:
             alrightLetsNotContinueThen
@@ -154,11 +192,11 @@ if promptReply == QMessageBox.Yes:
     processing.run("gdal:translate", {'INPUT':inImage,'TARGET_CRS':None,'NODATA':None,'COPY_SUBDATASETS':False,'OPTIONS':compressOptions,'EXTRA':'-b 4 -scale_1 128 255 -1000 1255','DATA_TYPE':0,'OUTPUT':processDirectory + inImageName + 'AlphaClean.tif'})
     processing.run("gdal:polygonize", {'INPUT':processDirectory + inImageName + 'AlphaClean.tif','BAND':1,'FIELD':'DN','EIGHT_CONNECTEDNESS':False,'EXTRA':'','OUTPUT':processDirectory + inImageName + 'Extent.gpkg'})
     processing.run("native:fixgeometries", {'INPUT':processDirectory + inImageName + 'Extent.gpkg','OUTPUT':processDirectory + inImageName + 'ExtentFix.gpkg'})
-    processing.run("native:extractbyexpression", {'INPUT':processDirectory + inImageName + 'ExtentFix.gpkg','EXPRESSION':' \"DN\" > 245','OUTPUT':processDirectory + inImageName + 'ExtentFilt.gpkg'})
+    processing.run("native:extractbyexpression", {'INPUT':processDirectory + inImageName + 'ExtentFix.gpkg','EXPRESSION':' \"DN\" > 245','OUTPUT':processDirectory + inImageName + 'ExtentFixFilt.gpkg'})
 
     #Determine the extent and coordinate system of the extent
-    fullExtentForCutline = processDirectory + inImageName + 'ExtentFilt.gpkg'
-    extentVector = QgsVectorLayer(processDirectory + inImageName + 'ExtentFilt.gpkg')
+    fullExtentForCutline = processDirectory + inImageName + 'ExtentFixFilt.gpkg'
+    extentVector = QgsVectorLayer(processDirectory + inImageName + 'ExtentFixFilt.gpkg')
     extentRectangle = extentVector.extent()
     extentCrs = extentVector.sourceCrs()
     #Then close the layer object so that QGIS doesn't unnecessarily hold on to it
@@ -166,16 +204,35 @@ if promptReply == QMessageBox.Yes:
     QgsProject.instance().removeMapLayer(extentVector.id())
 
     #Create a grid for dividing the image up into tiles
-    processing.run("native:creategrid", {'TYPE':2,'EXTENT':extentRectangle,'HSPACING':pixelSizeAve * approxPixelsPerTile,'VSPACING':pixelSizeAve * approxPixelsPerTile,'HOVERLAY':0,'VOVERLAY':0,'CRS':extentCrs,'OUTPUT':processDirectory + inImageName + 'ExtentFiltGrid.gpkg'})
-
+    processing.run("native:creategrid", {'TYPE':2,'EXTENT':extentRectangle,'HSPACING':pixelSizeX * approxPixelsPerTile,'VSPACING':pixelSizeY * approxPixelsPerTile,'HOVERLAY':0,'VOVERLAY':0,'CRS':extentCrs,'OUTPUT':processDirectory + inImageName + 'ExtentFixFiltGrid.gpkg'})
+    
     #Buffer it out so that we have space for clipping 
-    processing.run("native:buffer", {'INPUT':processDirectory + inImageName + 'ExtentFiltGrid.gpkg','DISTANCE':pixelSizeAve * 100,'SEGMENTS':5,'END_CAP_STYLE':0,'JOIN_STYLE':1,'MITER_LIMIT':2,'DISSOLVE':False,'OUTPUT':processDirectory + inImageName + 'ExtentFiltGridBuffer.gpkg'})
+    processing.run("native:buffer", {'INPUT':processDirectory + inImageName + 'ExtentFixFiltGrid.gpkg','DISTANCE':pixelSizeAve * 100,'SEGMENTS':5,'END_CAP_STYLE':0,'JOIN_STYLE':1,'MITER_LIMIT':2,'DISSOLVE':False,'OUTPUT':processDirectory + inImageName + 'ExtentFixFiltGridBuffer.gpkg'})
+    processing.run("native:buffer", {'INPUT':processDirectory + inImageName + 'ExtentFixFilt.gpkg','DISTANCE':pixelSizeAve * 100,'SEGMENTS':5,'END_CAP_STYLE':0,'JOIN_STYLE':1,'MITER_LIMIT':2,'DISSOLVE':False,'OUTPUT':processDirectory + inImageName + 'ExtentFixFiltBuffer.gpkg'})
+
+
+    #Determine the extent and coordinate system of the buffered extent
+    bufferedExtentVector = QgsVectorLayer(processDirectory + inImageName + 'ExtentFixFiltBuffer.gpkg')
+    bufferedExtentRectangle = bufferedExtentVector.extent()
+    bufferedExtentCrs = bufferedExtentVector.sourceCrs()
+    #Then close the layer object so that QGIS doesn't unnecessarily hold on to it
+    QgsProject.instance().addMapLayer(bufferedExtentVector, False)
+    QgsProject.instance().removeMapLayer(bufferedExtentVector.id())
+    
+    
+    processing.run("native:creategrid", {'TYPE':2,'EXTENT':bufferedExtentRectangle,'HSPACING':pixelSizeX * 100,'VSPACING':pixelSizeY * 100,'HOVERLAY':0,'VOVERLAY':0,'CRS':bufferedExtentCrs,'OUTPUT':processDirectory + inImageName + 'ExtentFixFiltGridMinis.gpkg'})
+
+
+    processing.run("native:joinattributesbylocation", {'INPUT':processDirectory + inImageName + 'ExtentFixFiltGridMinis.gpkg','JOIN':processDirectory + inImageName + 'ExtentFixFiltGridBuffer.gpkg',
+    'PREDICATE':[0],'JOIN_FIELDS':[],'METHOD':0,'DISCARD_NONMATCHING':False,'PREFIX':'tile','OUTPUT':processDirectory + inImageName + 'ExtentFixFiltGridMinisSelected.gpkg'})
+    
+    processing.run("native:dissolve", {'INPUT':processDirectory + inImageName + 'ExtentFixFiltGridMinisSelected.gpkg','FIELD':['tileid'],'OUTPUT':processDirectory + inImageName + 'ExtentFixFiltGridMinisSelectedDissolve.gpkg'})
 
     #Only grab the part of the grid that will actually be relevant
-    processing.run("native:extractbylocation", {'INPUT':processDirectory + inImageName + 'ExtentFiltGridBuffer.gpkg','PREDICATE':[0,4,5],'INTERSECT':processDirectory + inImageName + 'ExtentFilt.gpkg','OUTPUT':processDirectory + inImageName + 'ExtentFiltGridBufferGrabbed.gpkg'})
+    ###processing.run("native:extractbylocation", {'INPUT':processDirectory + inImageName + 'ExtentFiltGridBuffer.gpkg','PREDICATE':[0,4,5],'INTERSECT':processDirectory + inImageName + 'ExtentFilt.gpkg','OUTPUT':processDirectory + inImageName + 'ExtentFiltGridBufferGrabbed.gpkg'})
 
     #Split it out so there is a different extent to work from for each instance of the raster clipping
-    processing.run("native:splitvectorlayer", {'INPUT':processDirectory + inImageName + 'ExtentFiltGridBufferGrabbed.gpkg','FIELD':'id','FILE_TYPE':0,'OUTPUT':processBoundsDirectory})
+    processing.run("native:splitvectorlayer", {'INPUT':processDirectory + inImageName + 'ExtentFixFiltGridMinisSelectedDissolve.gpkg','FIELD':'tileid','FILE_TYPE':0,'OUTPUT':processBoundsDirectory})
     
     """
     #################################################################################################
@@ -202,7 +259,7 @@ if promptReply == QMessageBox.Yes:
             for indivBound1 in boundsNo1:
                 boundName1 = indivBound1.split('/')[-1]
                 boundName1 = boundName1.split('.')[0]
-                processing.run("gdal:cliprasterbymasklayer", {'INPUT':inImage,'MASK':indivBound1,'SOURCE_CRS':None,'TARGET_CRS':None,'ALPHA_BAND':False,'CROP_TO_CUTLINE':True,'KEEP_RESOLUTION':True,'SET_RESOLUTION':False,'X_RESOLUTION':None,'Y_RESOLUTION':None,'MULTITHREADING':True,'OPTIONS':finalCompressOptions,'DATA_TYPE':0,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory  + boundName1 + 'Tile.tif'})
+                processing.run("gdal:cliprasterbymasklayer", {'INPUT':inImage,'MASK':indivBound1,'SOURCE_CRS':None,'TARGET_CRS':None,'ALPHA_BAND':False,'CROP_TO_CUTLINE':True,'KEEP_RESOLUTION':False,'SET_RESOLUTION':False,'X_RESOLUTION':None,'Y_RESOLUTION':None,'MULTITHREADING':True,'OPTIONS':finalCompressOptions,'DATA_TYPE':0,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory  + boundName1 + 'Tile.tif'})
             print("Done pt.1")
         except BaseException as e:
             print(e)
@@ -211,7 +268,7 @@ if promptReply == QMessageBox.Yes:
             for indivBound2 in boundsNo2:
                 boundName2 = indivBound2.split('/')[-1]
                 boundName2 = boundName2.split('.')[0]
-                processing.run("gdal:cliprasterbymasklayer", {'INPUT':inImage,'MASK':indivBound2,'SOURCE_CRS':None,'TARGET_CRS':None,'ALPHA_BAND':False,'CROP_TO_CUTLINE':True,'KEEP_RESOLUTION':True,'SET_RESOLUTION':False,'X_RESOLUTION':None,'Y_RESOLUTION':None,'MULTITHREADING':True,'OPTIONS':finalCompressOptions,'DATA_TYPE':0,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory  + boundName2 + 'Tile.tif'})
+                processing.run("gdal:cliprasterbymasklayer", {'INPUT':inImage,'MASK':indivBound2,'SOURCE_CRS':None,'TARGET_CRS':None,'ALPHA_BAND':False,'CROP_TO_CUTLINE':True,'KEEP_RESOLUTION':False,'SET_RESOLUTION':False,'X_RESOLUTION':None,'Y_RESOLUTION':None,'MULTITHREADING':True,'OPTIONS':finalCompressOptions,'DATA_TYPE':0,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory  + boundName2 + 'Tile.tif'})
             print("Done pt.2")
         except BaseException as e:
             print(e)
@@ -220,7 +277,7 @@ if promptReply == QMessageBox.Yes:
             for indivBound3 in boundsNo3:
                 boundName3 = indivBound3.split('/')[-1]
                 boundName3 = boundName3.split('.')[0]
-                processing.run("gdal:cliprasterbymasklayer", {'INPUT':inImage,'MASK':indivBound3,'SOURCE_CRS':None,'TARGET_CRS':None,'ALPHA_BAND':False,'CROP_TO_CUTLINE':True,'KEEP_RESOLUTION':True,'SET_RESOLUTION':False,'X_RESOLUTION':None,'Y_RESOLUTION':None,'MULTITHREADING':True,'OPTIONS':finalCompressOptions,'DATA_TYPE':0,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory  + boundName3 + 'Tile.tif'})
+                processing.run("gdal:cliprasterbymasklayer", {'INPUT':inImage,'MASK':indivBound3,'SOURCE_CRS':None,'TARGET_CRS':None,'ALPHA_BAND':False,'CROP_TO_CUTLINE':True,'KEEP_RESOLUTION':False,'SET_RESOLUTION':False,'X_RESOLUTION':None,'Y_RESOLUTION':None,'MULTITHREADING':True,'OPTIONS':finalCompressOptions,'DATA_TYPE':0,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory  + boundName3 + 'Tile.tif'})
             print("Done pt.3")
         except BaseException as e:
             print(e)
@@ -229,7 +286,7 @@ if promptReply == QMessageBox.Yes:
             for indivBound4 in boundsNo4:
                 boundName4 = indivBound4.split('/')[-1]
                 boundName4 = boundName4.split('.')[0]
-                processing.run("gdal:cliprasterbymasklayer", {'INPUT':inImage,'MASK':indivBound4,'SOURCE_CRS':None,'TARGET_CRS':None,'ALPHA_BAND':False,'CROP_TO_CUTLINE':True,'KEEP_RESOLUTION':True,'SET_RESOLUTION':False,'X_RESOLUTION':None,'Y_RESOLUTION':None,'MULTITHREADING':True,'OPTIONS':finalCompressOptions,'DATA_TYPE':0,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory  + boundName4 + 'Tile.tif'})
+                processing.run("gdal:cliprasterbymasklayer", {'INPUT':inImage,'MASK':indivBound4,'SOURCE_CRS':None,'TARGET_CRS':None,'ALPHA_BAND':False,'CROP_TO_CUTLINE':True,'KEEP_RESOLUTION':False,'SET_RESOLUTION':False,'X_RESOLUTION':None,'Y_RESOLUTION':None,'MULTITHREADING':True,'OPTIONS':finalCompressOptions,'DATA_TYPE':0,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory  + boundName4 + 'Tile.tif'})
             print("Done pt.4")
         except BaseException as e:
             print(e)
@@ -276,51 +333,10 @@ else:
     print("Alright let's get straight into sharpening what is already in " + processTileDirectory)
 
 
-"""
-#################################################################################################
-#################################################################################################
-User options for the sharpening section (common values for speedUp and radius: 7SUP & 3RM & 4SBWM for 10cm,   7SUP & 8RM & 10SBWM for 25cm,    2SUP & 80RM & 50SBWM for 10m)
-"""
-
-
-speedUpFactor               = 2 #Between 1 and 1000, recommended is perhaps 10 to start off with  
-#This reduces the raster resolution for determining minimum and maximum values
-#If the speed up factor is too high, it will overlook smaller bright/dark sections and clip their values
-#If the speed up factor is too low, it can be too granular/zealous in preventing pixel value clipping, 
-#Plus it can make processing times very long (keep an eye on the console output for this)
-#Though as long as it isn't below 5 it likely won't be a real issue on performance
-
-radiusMetres                = 80 #At least 3 times greater than the original pixel size, also must be an integer
-#This parameter has a strong effect on the output
-#A smaller radius creates more extreme, spatially variable contrast enhancement
-#A larger radius is a more gentle, broader brush
-
-toneShiftFactor             = 0.9 #Between 0.1 and 1, recommended is 0.9
-#If broader darker areas are getting brightened too much (or vice versa for bright areas), 
-#or low contrast areas are having their contrast bumped up too high then you can decrease this value
-#Alternatively if you want to really brighten up dark areas you can increase this to 0.95 or even 1
-
-maxPixelChangeFactor        = 0.3 #Between 0.1 and 1, recommended is 0.3
-#If harsh edges are appearing where some areas are pushed too far towards black or white,
-#then you can decrease this value
-
-clippingPreventionFactor    = 0.05 #Between 0 and 0.9, recommended is 0.05
-#If the full stretch of pixels is getting stretched too far into complete blackness/whiteness,
-#despite a low speed up factor, then you can increase this value a little
-
-shadowBoostWidthMetres      = 50.0 #Must be larger than approximately 3 times the pixel size times the speed up factor
-#This sets a very approximate minimum width of the shadowed areas to be boosted
-
-shadowBoostFactor           = 0.5 #Between 0 and 1, recommended is 0.5
-
-
-#Keep in mind this script only adjusts brightnesses. A tinted image will affect results.
-#If you have an image with a significant coloured tint then it is best to first render out a new version
-#that has the 3 bands individually stretched such that the tint is as removed as it can be
-    
 
 """
-####################################################################################
+#############################################################################################
+#############################################################################################
 Set up for the batch processing
 """
 
@@ -347,7 +363,7 @@ except :
 
 
 """
-##############################################################
+####################################################################
 Starting up the for-loop...
 """
 
@@ -370,7 +386,6 @@ for inImageTile in inImageTileFiles:
         boundsFiles = glob.glob(processTileDirectory + '*')
         for f in boundsFiles:
             os.remove(f)
-            
     
     
     #Get the pixel size of the raster
@@ -386,9 +401,13 @@ for inImageTile in inImageTileFiles:
     radiusSize = radiusMetres/pixelSizeBig
     
     #Make sure the radius numbers slide nicely into the grass tools
-    diameterSize = int(numpy.ceil((radiusSize*2)) // 2 * 2 + 1)
+    if ras.crs().toProj4()[6:13] == 'longlat':
+        shadowDiameter = int(numpy.ceil((shadowBoostWidthMetres*1.4/(pixelSizeBig*111139))) // 2 * 2 + 1)
+        diameterSize = int(numpy.ceil((radiusSize*2)/111139) // 2 * 2 + 1)
+    else:
+        shadowDiameter = int(numpy.ceil((shadowBoostWidthMetres*1.4/pixelSizeBig)) // 2 * 2 + 1)
+        diameterSize = int(numpy.ceil((radiusSize*2)) // 2 * 2 + 1)
     diameterSizeThird = int(numpy.ceil(diameterSize/3) // 2 * 2 + 1)
-    shadowDiameter = int(numpy.ceil((shadowBoostWidthMetres*1.4/pixelSizeBig)) // 2 * 2 + 1)
 
     #If the radius size is less than a pixel then there's a problem
     if ((radiusMetres/3) <= pixelSizeAve):
@@ -424,7 +443,7 @@ for inImageTile in inImageTileFiles:
 
 
     """
-    ##############################################################
+    ###########################################################################
     Setting it up for the bigger processing
     """
 
@@ -516,6 +535,7 @@ for inImageTile in inImageTileFiles:
     processing.run("gdal:warpreproject", {'INPUT':processTileDirectory + 'Midrange.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':3,'NODATA':None,'TARGET_RESOLUTION':pixelSizeAve,'OPTIONS':compressOptions,'DATA_TYPE':0,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory + 'MidrangeResamp.tif'})
 
 
+
     #Look for potential clipping
     processing.run("qgis:rastercalculator", {'EXPRESSION':'(\"TrueMaximum@1\" - \"Midrange@1\")*((255/(\"Range@1\"+1)))-128','LAYERS':[processTileDirectory + 'TrueMaximum.tif',processTileDirectory + 'Midrange.tif',processTileDirectory + 'Range.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'WhiteClip.tif','OPTIONS': compressOptions})
     processing.run("qgis:rastercalculator", {'EXPRESSION':'-(\"TrueMinimum@1\" - \"Midrange@1\")*((255/(\"Range@1\"+1)))-128','LAYERS':[processTileDirectory + 'TrueMinimum.tif',processTileDirectory + 'Midrange.tif',processTileDirectory + 'Range.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'BlackClip.tif','OPTIONS': compressOptions})
@@ -529,7 +549,7 @@ for inImageTile in inImageTileFiles:
 
     #Use the determined formula to figure out what difference needs to be applied to the pixels to stretch them to 0-255
     #0.85 is a factor to increase the effect of the larger radius
-    processing.run("qgis:rastercalculator", {'EXPRESSION':'((\"CombinedBands@1\" - \"MidrangeResamp@1\")*((255/(\"RangeResamp@1\"+1)))+128 - \"CombinedBands@1\") / 0.80','LAYERS':[processTileDirectory + 'CombinedBands.tif',processTileDirectory + 'MidrangeResamp.tif',processTileDirectory + 'RangeResamp.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'DifferenceToApply.tif','OPTIONS': compressOptions})
+    processing.run("qgis:rastercalculator", {'EXPRESSION':'((\"CombinedBands@1\" - \"MidrangeResamp@1\")*((255/(\"RangeResamp@1\"+1)))+128 - \"CombinedBands@1\") / 0.80','LAYERS':[processTileDirectory + 'CombinedBands.tif',processTileDirectory + 'MidrangeResamp.tif',processTileDirectory + 'RangeResamp.tif'],'CELLSIZE':0,'EXTENT':rasExtent,'CRS':None,'OUTPUT':processTileDirectory + 'DifferenceToApply.tif','OPTIONS': compressOptions})
     
     
     """
@@ -586,7 +606,7 @@ for inImageTile in inImageTileFiles:
 
             #Use the determined formula to figure out what difference needs to be applied to the pixels to stretch them to 0-255
             #0.85 is a factor to decrease the effect of the smaller radius
-            processing.run("qgis:rastercalculator", {'EXPRESSION':'((\"CombinedBands@1\" - \"MidrangeResampThird@1\")*((255/(\"RangeResampThird@1\"+1)))+128 - \"CombinedBands@1\") * 0.80 ','LAYERS':[taskProcessTileDirectory + 'CombinedBands.tif',taskProcessTileDirectory + 'MidrangeResampThird.tif',taskProcessTileDirectory + 'RangeResampThird.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':taskProcessTileDirectory + 'DifferenceToApplyThird.tif','OPTIONS': compressOptions})
+            processing.run("qgis:rastercalculator", {'EXPRESSION':'((\"CombinedBands@1\" - \"MidrangeResampThird@1\")*((255/(\"RangeResampThird@1\"+1)))+128 - \"CombinedBands@1\") * 0.80 ','LAYERS':[taskProcessTileDirectory + 'CombinedBands.tif',taskProcessTileDirectory + 'MidrangeResampThird.tif',taskProcessTileDirectory + 'RangeResampThird.tif'],'CELLSIZE':0,'EXTENT':taskRasExtent,'CRS':None,'OUTPUT':taskProcessTileDirectory + 'DifferenceToApplyThird.tif','OPTIONS': compressOptions})
 
             
             """
@@ -601,17 +621,19 @@ for inImageTile in inImageTileFiles:
             #Scale the differencing amounts back as per the formula to cap extreme values
             processing.run("qgis:rastercalculator", {'EXPRESSION':'(' + str(capDenominator) + '/ ( 1 + (1 - ' + str(capMinusFactor) + ' ) ^ ( \"CombinedDifference@1\" ) ) ) - ' + str(capSubtraction),'LAYERS':[taskInImageTile,taskProcessTileDirectory + 'CombinedDifference.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':taskProcessTileDirectory + 'ScaledBackDifference.tif','OPTIONS': compressOptions})
 
+            
 
             #Calculate how much to pull back the pixels from clipping
             processing.run("qgis:rastercalculator", {'EXPRESSION':' ( 1.004 ^(( (\"WhiteClipByteExpandSmooth@1\" ^ 0.5) + (\"WhiteClipByteExpandSmoothThird@1\" ^ 0.5) ) * 1)) - 1','LAYERS':[taskProcessTileDirectory + 'WhiteClipByteExpandSmoothThird.tif',taskProcessTileDirectory + 'WhiteClipByteExpandSmooth.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':taskProcessTileDirectory + 'WhiteClipFactor.tif','OPTIONS':compressOptions})
             processing.run("qgis:rastercalculator", {'EXPRESSION':' ( 1.004 ^(( (\"BlackClipByteExpandSmooth@1\" ^ 0.5) + (\"BlackClipByteExpandSmoothThird@1\" ^ 0.5) ) * 1)) - 1','LAYERS':[taskProcessTileDirectory + 'BlackClipByteExpandSmoothThird.tif',taskProcessTileDirectory + 'BlackClipByteExpandSmooth.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':taskProcessTileDirectory + 'BlackClipFactor.tif','OPTIONS':compressOptions})
             processing.run("gdal:warpreproject", {'INPUT':taskProcessTileDirectory + 'WhiteClipFactor.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':3,'NODATA':None,'TARGET_RESOLUTION':pixelSizeAve,'OPTIONS':compressOptions,'DATA_TYPE':6,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':taskProcessTileDirectory + 'WhiteClipFactorResamp.tif'})
             processing.run("gdal:warpreproject", {'INPUT':taskProcessTileDirectory + 'BlackClipFactor.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':3,'NODATA':None,'TARGET_RESOLUTION':pixelSizeAve,'OPTIONS':compressOptions,'DATA_TYPE':6,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':taskProcessTileDirectory + 'BlackClipFactorResamp.tif'})
+
             
             #Apply the difference to the bands, potentially with clipping prevention
-            processing.run("qgis:rastercalculator", {'EXPRESSION':'((\"' + taskInImageTileName + '@1\" + \"ScaledBackDifference@1\")*(1- \"WhiteClipFactorResamp@1\" - \"BlackClipFactorResamp@1\"))+ (255 * ( \"BlackClipFactorResamp@1\" )) + (\"ShadowBoostFinal@1\")','LAYERS':[taskInImageTile,taskProcessTileDirectory + 'ScaledBackDifference.tif',taskProcessTileDirectory + 'WhiteClipFactorResamp.tif',taskProcessTileDirectory + 'BlackClipFactorResamp.tif',taskProcessTileDirectory + 'ShadowBoostFinal.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':taskProcessTileDirectory + 'Band1Diffed.tif','OPTIONS': compressOptions})
-            processing.run("qgis:rastercalculator", {'EXPRESSION':'((\"' + taskInImageTileName + '@2\" + \"ScaledBackDifference@1\")*(1- \"WhiteClipFactorResamp@1\" - \"BlackClipFactorResamp@1\"))+ (255 * ( \"BlackClipFactorResamp@1\" )) + (\"ShadowBoostFinal@1\")','LAYERS':[taskInImageTile,taskProcessTileDirectory + 'ScaledBackDifference.tif',taskProcessTileDirectory + 'WhiteClipFactorResamp.tif',taskProcessTileDirectory + 'BlackClipFactorResamp.tif',taskProcessTileDirectory + 'ShadowBoostFinal.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':taskProcessTileDirectory + 'Band2Diffed.tif','OPTIONS': compressOptions})
-            processing.run("qgis:rastercalculator", {'EXPRESSION':'((\"' + taskInImageTileName + '@3\" + \"ScaledBackDifference@1\")*(1- \"WhiteClipFactorResamp@1\" - \"BlackClipFactorResamp@1\"))+ (255 * ( \"BlackClipFactorResamp@1\" )) + (\"ShadowBoostFinal@1\")','LAYERS':[taskInImageTile,taskProcessTileDirectory + 'ScaledBackDifference.tif',taskProcessTileDirectory + 'WhiteClipFactorResamp.tif',taskProcessTileDirectory + 'BlackClipFactorResamp.tif',taskProcessTileDirectory + 'ShadowBoostFinal.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':taskProcessTileDirectory + 'Band3Diffed.tif','OPTIONS': compressOptions})
+            processing.run("qgis:rastercalculator", {'EXPRESSION':'((\"' + taskInImageTileName + '@1\" + \"ScaledBackDifference@1\")*(1- \"WhiteClipFactorResamp@1\" - \"BlackClipFactorResamp@1\"))+ (255 * ( \"BlackClipFactorResamp@1\" )) + (\"ShadowBoostFinal@1\")','LAYERS':[taskInImageTile,taskProcessTileDirectory + 'ScaledBackDifference.tif',taskProcessTileDirectory + 'WhiteClipFactorResamp.tif',taskProcessTileDirectory + 'BlackClipFactorResamp.tif',taskProcessTileDirectory + 'ShadowBoostFinal.tif'],'CELLSIZE':0,'EXTENT':taskRasExtent,'CRS':None,'OUTPUT':taskProcessTileDirectory + 'Band1Diffed.tif','OPTIONS': compressOptions})
+            processing.run("qgis:rastercalculator", {'EXPRESSION':'((\"' + taskInImageTileName + '@2\" + \"ScaledBackDifference@1\")*(1- \"WhiteClipFactorResamp@1\" - \"BlackClipFactorResamp@1\"))+ (255 * ( \"BlackClipFactorResamp@1\" )) + (\"ShadowBoostFinal@1\")','LAYERS':[taskInImageTile,taskProcessTileDirectory + 'ScaledBackDifference.tif',taskProcessTileDirectory + 'WhiteClipFactorResamp.tif',taskProcessTileDirectory + 'BlackClipFactorResamp.tif',taskProcessTileDirectory + 'ShadowBoostFinal.tif'],'CELLSIZE':0,'EXTENT':taskRasExtent,'CRS':None,'OUTPUT':taskProcessTileDirectory + 'Band2Diffed.tif','OPTIONS': compressOptions})
+            processing.run("qgis:rastercalculator", {'EXPRESSION':'((\"' + taskInImageTileName + '@3\" + \"ScaledBackDifference@1\")*(1- \"WhiteClipFactorResamp@1\" - \"BlackClipFactorResamp@1\"))+ (255 * ( \"BlackClipFactorResamp@1\" )) + (\"ShadowBoostFinal@1\")','LAYERS':[taskInImageTile,taskProcessTileDirectory + 'ScaledBackDifference.tif',taskProcessTileDirectory + 'WhiteClipFactorResamp.tif',taskProcessTileDirectory + 'BlackClipFactorResamp.tif',taskProcessTileDirectory + 'ShadowBoostFinal.tif'],'CELLSIZE':0,'EXTENT':taskRasExtent,'CRS':None,'OUTPUT':taskProcessTileDirectory + 'Band3Diffed.tif','OPTIONS': compressOptions})
 
             
             """
@@ -619,17 +641,19 @@ for inImageTile in inImageTileFiles:
             The tiles need a fading alpha band so they sit together nicely
             """
 
-            #Construct an alpha layer for each tile that fades in opacity at the border
+            
+            #Get the full extent of the tile
             processing.run("native:polygonfromlayerextent", {'INPUT':taskInImageTile,'ROUND_TO':0,'OUTPUT':taskProcessTileDirectory + 'FullExtent.gpkg'})
             
-            processing.run("native:buffer", {'INPUT':taskProcessTileDirectory + 'FullExtent.gpkg','DISTANCE':pixelSizeAve / -2,'SEGMENTS':5,'END_CAP_STYLE':0,'JOIN_STYLE':0,'MITER_LIMIT':2,'DISSOLVE':False,'OUTPUT':taskProcessTileDirectory + 'FullExtentIn.gpkg'})
+            #Bring this in so that any border issues are taken away
+            processing.run("native:buffer", {'INPUT':taskProcessTileDirectory + 'FullExtent.gpkg','DISTANCE':pixelSizeAve * (-2),'SEGMENTS':5,'END_CAP_STYLE':0,'JOIN_STYLE':0,'MITER_LIMIT':2,'DISSOLVE':False,'OUTPUT':taskProcessTileDirectory + 'FullExtentIn.gpkg'})
             
+            #Then convert to lines so that
             processing.run("native:polygonstolines", {'INPUT':taskProcessTileDirectory + 'FullExtentIn.gpkg','OUTPUT':taskProcessTileDirectory + 'FullExtentInLines.gpkg'})
             
-            processing.run("gdal:rasterize", {'INPUT':taskProcessTileDirectory + 'FullExtentInLines.gpkg','FIELD':'','BURN':1,'UNITS':1,'WIDTH':pixelSizeAve,'HEIGHT':pixelSizeAve,'EXTENT':taskRasExtent,'NODATA':None,'OPTIONS':compressOptions,'DATA_TYPE':0,'INIT':None,'INVERT':False,'EXTRA':'','OUTPUT':taskProcessTileDirectory + 'FullExtentLinesRasterize.tif'})
-            
+            #A raster is buffered off the lines so that has its values at 255 across most of the raster, but fades down to 0 at the edges
+            processing.run("gdal:rasterize", {'INPUT':taskProcessTileDirectory + 'FullExtentInLines.gpkg','FIELD':'','BURN':1,'UNITS':1,'WIDTH':pixelSizeX,'HEIGHT':pixelSizeY,'EXTENT':taskRasExtent,'NODATA':None,'OPTIONS':compressOptions,'DATA_TYPE':0,'INIT':None,'INVERT':False,'EXTRA':'','OUTPUT':taskProcessTileDirectory + 'FullExtentLinesRasterize.tif'})
             processing.run("gdal:proximity", {'INPUT':taskProcessTileDirectory + 'FullExtentLinesRasterize.tif','BAND':1,'VALUES':'1','UNITS':1,'MAX_DISTANCE':64,'REPLACE':None,'NODATA':64,'OPTIONS':compressOptions,'EXTRA':'','DATA_TYPE':0,'OUTPUT':taskProcessTileDirectory + 'FullExtentLinesRasterizeDistance.tif'})
-            
             processing.run("qgis:rastercalculator", {'EXPRESSION':'\"FullExtentLinesRasterizeDistance@1\" * 4','LAYERS':[taskProcessTileDirectory + 'FullExtentLinesRasterizeDistance.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':taskProcessTileDirectory + 'AlphaBand.tif','OPTIONS': compressOptions})
 
 
@@ -641,10 +665,10 @@ for inImageTile in inImageTileFiles:
             print("Final value clipping and exporting...")
 
             #Clip values to within 0 and 255
-            processing.run("gdal:warpreproject", {'INPUT':taskProcessTileDirectory + 'Band1Diffed.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':0,'NODATA':None,'TARGET_RESOLUTION':None,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':taskProcessTileDirectory + 'Band1DiffedByte.tif'})
-            processing.run("gdal:warpreproject", {'INPUT':taskProcessTileDirectory + 'Band2Diffed.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':0,'NODATA':None,'TARGET_RESOLUTION':None,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':taskProcessTileDirectory + 'Band2DiffedByte.tif'})
-            processing.run("gdal:warpreproject", {'INPUT':taskProcessTileDirectory + 'Band3Diffed.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':0,'NODATA':None,'TARGET_RESOLUTION':None,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':taskProcessTileDirectory + 'Band3DiffedByte.tif'})
-            processing.run("gdal:warpreproject", {'INPUT':taskProcessTileDirectory + 'AlphaBand.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':0,'NODATA':None,'TARGET_RESOLUTION':None,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':taskProcessTileDirectory + 'AlphaBandByte.tif'})
+            processing.run("gdal:warpreproject", {'INPUT':taskProcessTileDirectory + 'Band1Diffed.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':0,'NODATA':None,'TARGET_RESOLUTION':None,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':taskRasExtent,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':taskProcessTileDirectory + 'Band1DiffedByte.tif'})
+            processing.run("gdal:warpreproject", {'INPUT':taskProcessTileDirectory + 'Band2Diffed.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':0,'NODATA':None,'TARGET_RESOLUTION':None,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':taskRasExtent,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':taskProcessTileDirectory + 'Band2DiffedByte.tif'})
+            processing.run("gdal:warpreproject", {'INPUT':taskProcessTileDirectory + 'Band3Diffed.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':0,'NODATA':None,'TARGET_RESOLUTION':None,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':taskRasExtent,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':taskProcessTileDirectory + 'Band3DiffedByte.tif'})
+            processing.run("gdal:warpreproject", {'INPUT':taskProcessTileDirectory + 'AlphaBand.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':0,'NODATA':None,'TARGET_RESOLUTION':None,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':taskRasExtent,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':taskProcessTileDirectory + 'AlphaBandByte.tif'})
 
             #Bring the bands together
             processing.run("gdal:buildvirtualraster", {'INPUT':[taskProcessTileDirectory + 'Band1DiffedByte.tif',taskProcessTileDirectory + 'Band2DiffedByte.tif',taskProcessTileDirectory + 'Band3DiffedByte.tif',taskProcessTileDirectory + 'AlphaBandByte.tif'],'RESOLUTION':2,'SEPARATE':True,'PROJ_DIFFERENCE':True,'ADD_ALPHA':False,'ASSIGN_CRS':None,'RESAMPLING':0,'SRC_NODATA':'','EXTRA':'','OUTPUT':taskProcessTileDirectory + 'Band123A.vrt'})
@@ -652,9 +676,12 @@ for inImageTile in inImageTileFiles:
             #Determine where must be clipped to, given the bigger pixels won't line up with the smaller pixels
             processing.run("native:polygonfromlayerextent", {'INPUT':taskProcessTileDirectory + 'ReducedResRed.tif','ROUND_TO':0,'OUTPUT':taskProcessTileDirectory + 'ReducedResExtent.gpkg'})
             processing.run("native:buffer", {'INPUT':taskProcessTileDirectory + 'ReducedResExtent.gpkg','DISTANCE':(pixelSizeBig + (pixelSizeAve * 0.8)) * -1,'SEGMENTS':5,'END_CAP_STYLE':0,'JOIN_STYLE':0,'MITER_LIMIT':2,'DISSOLVE':False,'OUTPUT':taskProcessTileDirectory + 'ReducedResExtentIn.gpkg'})
+         
             
             #Clip to vrt to export a final tif
-            processing.run("gdal:cliprasterbymasklayer", {'INPUT':taskProcessTileDirectory + 'Band123A.vrt','MASK':taskProcessTileDirectory + 'ReducedResExtentIn.gpkg','SOURCE_CRS':None,'TARGET_CRS':None,'NODATA':None,'ALPHA_BAND':False,'CROP_TO_CUTLINE':False,'KEEP_RESOLUTION':True,'SET_RESOLUTION':False,'X_RESOLUTION':None,'Y_RESOLUTION':None,'MULTITHREADING':True,'OPTIONS':finalCompressOptions,'DATA_TYPE':1,'EXTRA':'-co \"PHOTOMETRIC=RGB\" -srcalpha -dstalpha ' + gdalOptions,'OUTPUT':outImageDir + taskInImageTileName + 'ClippedFinalTile' + settingsSuffix + '.tif'})
+            processing.run("gdal:cliprasterbymasklayer", {'INPUT':taskProcessTileDirectory + 'Band123A.vrt','MASK':taskProcessTileDirectory + 'FullExtentIn.gpkg','SOURCE_CRS':None,'TARGET_CRS':None,'NODATA':None,
+            'ALPHA_BAND':False,'CROP_TO_CUTLINE':True,'KEEP_RESOLUTION':False,'SET_RESOLUTION':False,'X_RESOLUTION':None,'Y_RESOLUTION':None,'MULTITHREADING':True,'OPTIONS':finalCompressOptions,'DATA_TYPE':1,
+            'EXTRA':'-co \"PHOTOMETRIC=RGB\" -srcalpha -dstalpha ' + gdalOptions,'OUTPUT':outImageDir + taskInImageTileName + 'ClippedFinalTile' + settingsSuffix + '.tif'})
             print("Final tile export done")
             
             """
@@ -677,7 +704,7 @@ for inImageTile in inImageTileFiles:
                     e = e
                     
         except BaseException as e:
-            print("Bro it failed" + inImageTileName)
+            print("Bro it failed " + inImageTileName)
             print(e)
             
     """
@@ -706,8 +733,9 @@ Once all tiles are processed, they can be brought together
 print("Ok lets make sure the tasks (" + str(QgsApplication.taskManager().countActiveTasks()) + ") have finished before doing the final merge")
 try:
     finalBeyondGrassTask.waitForFinished(timeout = 900000)
+    print("Ok the last task is done now")
 except BaseException as e:
-    print(e)   
+    print("Ok waiting for the last task failed because " + e)   
 
 
 #Prepare to make a final mosaic where the alpha bands are respected, this is a string being prepped for cmd
@@ -716,13 +744,10 @@ outImageDir = outImageDir.replace("/", "\\")
 
 #Make the final image directory
 finalImageDir = finalImageDir.replace("/", "\\")
-try:
-    os.mkdir(finalImageDir)
-except BaseException as e:
-    print(e)
+if not os.path.exists(finalImageDir):os.mkdir(finalImageDir)
 
 #Prepare variables for the final merging in GDAL
-fullExtentForCutline = processDirectory + inImageName + 'ExtentFilt.gpkg'
+fullExtentForCutline = processDirectory + inImageName + 'ExtentFixFilt.gpkg'
 fullExtentForCutline = fullExtentForCutline.replace("/", "\\")
 finalOutputImageName = outImageName + datetime.now().strftime("%Y%m%d%H%M") 
 finalOutputImage = finalImageDir + finalOutputImageName + '.tif'
@@ -773,9 +798,5 @@ print("The final tasks (making a thumbnail, histogram and pyramids) will continu
 """
 #######################################################################
 """
-
-
-
-
 
 
