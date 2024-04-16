@@ -6,8 +6,6 @@ It could otherwise be thought of as a way of stretching pixel values, but in a s
 
 ___________________________________
 
-Be aware before using this script that there are two main places where you need to set the variables (see "User options for the sharpening section")
-
 The script first splits the original tif into tiles
 
 Then for each tile it will determine various attributes of the raster such as local minimum, maximum, range and midrange values, as well as shadow likelihood
