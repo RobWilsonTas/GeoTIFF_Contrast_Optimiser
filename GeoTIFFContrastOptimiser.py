@@ -1,12 +1,7 @@
-import numpy
-import psutil
-import os
-import glob
-import time
+import numpy, psutil, os, glob, time, signal
 from qgis.PyQt.QtWidgets import QMessageBox
 from qgis.core import QgsRasterLayer
 from datetime import datetime
-import signal
 startTime = time.time()
 
 
@@ -28,28 +23,28 @@ gdalOptions = '--config GDAL_NUM_THREADS ALL_CPUS -overwrite'
 
 """
 #############################################################
-User options for the sharpening section (common values for speedUp and radius: 7SUP & 3RM & 4SBWM for 10cm,   7SUP & 8RM & 10SBWM for 25cm,    2SUP & 80RM & 50SBWM for 10m)
+User options for the sharpening section (common values for speedUp and radius: 6SUP & 10RM & 4SBWM for 10cm,   6SUP & 15RM & 10SBWM for 25cm,    2SUP & 80RM & 50SBWM for 10m)
 """
 
 
-speedUpFactor               = 8 #Between 1 and 1000, recommended is perhaps 10 to start off with  
+speedUpFactor               = 6 #Between 1 and 1000, recommended is perhaps 6 to start off with  
 #This reduces the raster resolution for determining minimum and maximum values
 #If the speed up factor is too high, it will overlook smaller bright/dark sections and clip their values
 #If the speed up factor is too low, it can be too granular/zealous in preventing pixel value clipping, 
 #Plus it can make processing times very long (keep an eye on the console output for this)
 #Though as long as it isn't below 5 it likely won't be a real issue on performance
 
-radiusMetres                = 7 #At least 3 times greater than the original pixel size, also must be an integer
+radiusMetres                = 10 #At least 3 times greater than the original pixel size, also must be an integer
 #This parameter has a strong effect on the output
 #A smaller radius creates more extreme, spatially variable contrast enhancement
 #A larger radius is a more gentle, broader brush
 
-toneShiftFactor             = 0.9 #Between 0.1 and 1, recommended is 0.9
+toneShiftFactor             = 0.85 #Between 0.1 and 1, recommended is 0.85
 #If broader darker areas are getting brightened too much (or vice versa for bright areas), 
 #or low contrast areas are having their contrast bumped up too high then you can decrease this value
 #Alternatively if you want to really brighten up dark areas you can increase this to 0.95 or even 1
 
-maxPixelChangeFactor        = 0.3 #Between 0.1 and 1, recommended is 0.3
+maxPixelChangeFactor        = 0.25 #Between 0.1 and 1, recommended is 0.25
 #If harsh edges are appearing where some areas are pushed too far towards black or white,
 #then you can decrease this value
 
@@ -461,8 +456,8 @@ for inImageTile in inImageTileFiles:
     processing.run("grass7:r.series", {'input':[processTileDirectory + 'ReducedResBlue.tif',processTileDirectory + 'ReducedResGreen.tif',processTileDirectory + 'ReducedResRed.tif'],'-n':True,'method':[4],'quantile':'','weights':'','output':processTileDirectory + 'TrueMinimum.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
     processing.run("grass7:r.series", {'input':[processTileDirectory + 'ReducedResBlue.tif',processTileDirectory + 'ReducedResGreen.tif',processTileDirectory + 'ReducedResRed.tif'],'-n':True,'method':[6],'quantile':'','weights':'','output':processTileDirectory + 'TrueMaximum.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
 
-    #Reduce the resolution for the combined bands
-    processing.run("gdal:translate", {'INPUT':processTileDirectory + 'CombinedBands.tif','TARGET_CRS':None,'NODATA':None,'COPY_SUBDATASETS':False,'OPTIONS':compressOptions,'EXTRA':'-r bilinear -tr ' + str(pixelSizeBig) + ' ' + str(pixelSizeBig) + ' -b 1','DATA_TYPE':0,'OUTPUT':processTileDirectory + 'ReducedResCombined.tif'})
+    #Reduce the resolution for the combined bands, bilinear and the scale parameters are used to prevent values from being 0, which causes glitches in grass tools
+    processing.run("gdal:translate", {'INPUT':processTileDirectory + 'CombinedBands.tif','TARGET_CRS':None,'NODATA':None,'COPY_SUBDATASETS':False,'OPTIONS':compressOptions,'EXTRA':'-r bilinear -tr ' + str(pixelSizeBig) + ' ' + str(pixelSizeBig) + ' -b 1 -scale 0 255 1 255','DATA_TYPE':0,'OUTPUT':processTileDirectory + 'ReducedResCombined.tif'})
 
 
     """
@@ -558,12 +553,12 @@ for inImageTile in inImageTileFiles:
     """
 
     #Calculate the minimum and maximum of the combined bands within the radius
-    processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'ReducedResCombined.tif','selection':None,'method':4,'size':diameterSizeThird,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'MaximumCombinedThird.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
-    processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'ReducedResCombined.tif','selection':None,'method':3,'size':diameterSizeThird,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'MinimumCombinedThird.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
+    processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'ReducedResCombined.tif','selection':processTileDirectory + 'ReducedResCombined.tif','method':4,'size':diameterSizeThird,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'MaximumCombinedThird.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
+    processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'ReducedResCombined.tif','selection':processTileDirectory + 'ReducedResCombined.tif','method':3,'size':diameterSizeThird,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'MinimumCombinedThird.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
 
     #Smooth off those hard edges
-    processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'MaximumCombinedThird.tif','selection':None,'method':0,'size':diameterSizeThird,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'MaximumSmoothThird.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
-    processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'MinimumCombinedThird.tif','selection':None,'method':0,'size':diameterSizeThird,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'MinimumSmoothThird.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
+    processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'MaximumCombinedThird.tif','selection':processTileDirectory + 'MaximumCombinedThird.tif','method':0,'size':diameterSizeThird,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'MaximumSmoothThird.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
+    processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'MinimumCombinedThird.tif','selection':processTileDirectory + 'MinimumCombinedThird.tif','method':0,'size':diameterSizeThird,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'MinimumSmoothThird.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
 
     """
     ###########################################################################
@@ -691,7 +686,7 @@ for inImageTile in inImageTileFiles:
             
             #Make sure that there aren't too many processes piling up
             debugText = open(otherDirectory + inImageName + "Debug.txt","a+")
-            debugText.write(datetime.now().strftime("%Y%m%d %H%M%S") + ": Ok the tile " + taskInImageTileName + 'is done. Currently there are ' + str(QgsApplication.taskManager().countActiveTasks()) + ' tasks running. Free memory is ' + str(round(psutil.virtual_memory().free / 1000000000,1)) + 'gb. \n')
+            debugText.write(datetime.now().strftime("%Y%m%d %H%M%S") + ": Ok " + taskInImageTileName + ' is done. Currently there are ' + str(QgsApplication.taskManager().countActiveTasks()) + ' tasks running. Free memory is ' + str(round(psutil.virtual_memory().free / 1000000000,1)) + 'gb. \n')
             debugText.close()
             
             #Clean up the files so we don't run out of hard drive space
@@ -706,6 +701,9 @@ for inImageTile in inImageTileFiles:
         except BaseException as e:
             print("Bro it failed " + inImageTileName)
             print(e)
+            debugText = open(otherDirectory + inImageName + "Debug.txt","a+")
+            debugText.write(datetime.now().strftime("%Y%m%d %H%M%S") + ": So " + taskInImageTileName + ' failed to process. Error message is ' + e + '. Currently there are ' + str(QgsApplication.taskManager().countActiveTasks()) + ' tasks running. Free memory is ' + str(round(psutil.virtual_memory().free / 1000000000,1)) + 'gb. \n')
+            debugText.close()
             
     """
     #######################################################################
@@ -731,11 +729,13 @@ Once all tiles are processed, they can be brought together
 
 #This makes sure that the cmd process doesn't take off before the tiles are ready    
 print("Ok lets make sure the tasks (" + str(QgsApplication.taskManager().countActiveTasks()) + ") have finished before doing the final merge")
+
 try:
-    finalBeyondGrassTask.waitForFinished(timeout = 900000)
-    print("Ok the last task is done now")
+    finalBeyondGrassTask.waitForFinished(timeout = 300000)
 except BaseException as e:
-    print("Ok waiting for the last task failed because " + e)   
+    print(e)   
+    
+print("Ok so there are still " + str(QgsApplication.taskManager().countActiveTasks()) + "tasks running before the merge")
 
 
 #Prepare to make a final mosaic where the alpha bands are respected, this is a string being prepped for cmd
@@ -778,7 +778,7 @@ def finalWork(task, taskFinalOutputImage):
         processing.run("gdal:warpreproject", {'INPUT':processDirectory + 'ReducedResForHisto.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':0,'NODATA':None,'TARGET_RESOLUTION':pixelSizeAve * 100,'OPTIONS':finalCompressOptions,'DATA_TYPE':1,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':'','OUTPUT':finalImageDir + finalOutputImageName + 'Thumbnail.tif'})
         
         #Building pyramid layers so that you can browse easily
-        processing.run("gdal:overviews", {'INPUT':taskFinalOutputImage,'CLEAN':False,'LEVELS':'','RESAMPLING':0,'FORMAT':1,'EXTRA':''})
+        processing.run("gdal:overviews", {'INPUT':taskFinalOutputImage,'CLEAN':False,'LEVELS':'','RESAMPLING':0,'FORMAT':1,'EXTRA':'--config COMPRESS_OVERVIEW JPEG'})
     except BaseException as e:
         print (e)
 
