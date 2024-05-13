@@ -2,6 +2,7 @@ import numpy, psutil, os, glob, time, signal
 from qgis.PyQt.QtWidgets import QMessageBox
 from qgis.core import QgsRasterLayer
 from datetime import datetime
+from pathlib import Path
 startTime = time.time()
 
 
@@ -11,14 +12,13 @@ User options for the tiling section
 """
 
 #Initial variable assignment
-rootProcessDirectory    = 'C:/Temp/' #E.g 'C:/Temp/'
-inImage                 = 'C:/Temp/YourImage.tif' #E.g 'C:/Temp/BigImage.tif'
+inImage                 = 'C:/TempYourImage.tif' #E.g 'C:/Temp/BigImage.tif'
 approxPixelsPerTile     = 12000 #E.g 12000, this will vary based on your ram
 
 #Options for compressing the images, ZSTD gives the best speed but LZW allows you to view the thumbnail in windows explorer
-compressOptions = 'COMPRESS=ZSTD|NUM_THREADS=ALL_CPUS|PREDICTOR=1|ZSTD_LEVEL=1|BIGTIFF=IF_SAFER|TILED=YES'
-finalCompressOptions = 'COMPRESS=LZW|PREDICTOR=1|NUM_THREADS=ALL_CPUS|BIGTIFF=IF_SAFER|TILED=YES'
-gdalOptions = '--config GDAL_NUM_THREADS ALL_CPUS -overwrite'
+compressOptions =       'COMPRESS=ZSTD|NUM_THREADS=ALL_CPUS|PREDICTOR=1|ZSTD_LEVEL=1|BIGTIFF=IF_SAFER|TILED=YES'
+finalCompressOptions =  'COMPRESS=LZW|PREDICTOR=2|NUM_THREADS=ALL_CPUS|BIGTIFF=IF_SAFER|TILED=YES'
+gdalOptions =           '--config GDAL_NUM_THREADS ALL_CPUS -overwrite'
 
 
 """
@@ -34,7 +34,7 @@ speedUpFactor               = 6 #Between 1 and 1000, recommended is perhaps 6 to
 #Plus it can make processing times very long (keep an eye on the console output for this)
 #Though as long as it isn't below 5 it likely won't be a real issue on performance
 
-radiusMetres                = 10 #At least 3 times greater than the original pixel size, also must be an integer
+radiusMetres                = 30 #At least 3 times greater than the original pixel size, also must be an integer
 #This parameter has a strong effect on the output
 #A smaller radius creates more extreme, spatially variable contrast enhancement
 #A larger radius is a more gentle, broader brush
@@ -52,10 +52,10 @@ clippingPreventionFactor    = 0.05 #Between 0 and 0.9, recommended is 0.05
 #If the full stretch of pixels is getting stretched too far into complete blackness/whiteness,
 #despite a low speed up factor, then you can increase this value a little
 
-shadowBoostWidthMetres      = 4.0 #Must be larger than approximately 3 times the pixel size times the speed up factor
+shadowBoostWidthMetres      = 12.0 #Must be larger than approximately 3 times the pixel size times the speed up factor
 #This sets a very approximate minimum width of the shadowed areas to be boosted
 
-shadowBoostFactor           = 0.4 #Between 0 and 1, recommended is 0.4
+shadowBoostFactor           = 0.2 #Between 0 and 1, recommended is 0.4
 
 
 #Keep in mind this script only adjusts brightnesses. A tinted image will affect results.
@@ -74,7 +74,8 @@ inImageName = inImageName[-1]
 inImageName = inImageName[:len(inImageName)-4]
 outImageName = inImageName
 
-#Making a folder for processing each time, to avoid issues with locks
+#Making a folder for processing
+rootProcessDirectory = str(Path(inImage).parent.absolute()).replace('\\','/') + '/'
 processDirectoryInstance = rootProcessDirectory + inImageName + 'Process' + '/'
 
 #Creating all the subfolder variables
@@ -87,13 +88,15 @@ finalImageDir                   = processDirectoryInstance + '6Final/'
 inImageTileDir = processTileDirectory
 
 #Creating all the subfolders
-if not os.path.exists(processDirectoryInstance):os.mkdir(processDirectoryInstance) 
-if not os.path.exists(processDirectory):        os.mkdir(processDirectory)
-if not os.path.exists(otherDirectory):          os.mkdir(otherDirectory)
-if not os.path.exists(processBoundsDirectory):  os.mkdir(processBoundsDirectory)
-if not os.path.exists(processTileDirectory):    os.mkdir(processTileDirectory)
-if not os.path.exists(outImageDir):             os.mkdir(outImageDir)
-if not os.path.exists(finalImageDir):           os.mkdir(finalImageDir)
+if not os.path.exists(processDirectoryInstance):                os.mkdir(processDirectoryInstance) 
+if not os.path.exists(processDirectory):                        os.mkdir(processDirectory)
+if not os.path.exists(otherDirectory):                          os.mkdir(otherDirectory)
+if not os.path.exists(otherDirectory + 'ConfirmationFiles/'):   os.mkdir(otherDirectory + 'ConfirmationFiles/')
+if not os.path.exists(processBoundsDirectory):                  os.mkdir(processBoundsDirectory)
+if not os.path.exists(processTileDirectory):                    os.mkdir(processTileDirectory)
+if not os.path.exists(outImageDir):                             os.mkdir(outImageDir)
+if not os.path.exists(finalImageDir):                           os.mkdir(finalImageDir)
+
 
 #Make a debug text file
 debugText = open(otherDirectory + inImageName + "Debug.txt","w+")
@@ -102,7 +105,7 @@ debugText.close()
 
 """
 ####################################################################################
-Gather information about the initial image then start up the first time process if need be
+Gather information about the initial image
 """
 
 #Get the pixel size and coordinate system of the raster
@@ -111,7 +114,47 @@ pixelSizeX = ras.rasterUnitsPerPixelX()
 pixelSizeY = ras.rasterUnitsPerPixelY()
 pixelSizeAve = (pixelSizeX + pixelSizeY) / 2
 coordinateSystem = ras.crs().authid()
+rasExtent = ras.extent()
 
+#Now set up some internal variables
+pixelSizeBig = pixelSizeAve * speedUpFactor
+radiusSize = radiusMetres/pixelSizeBig
+
+#Make sure the radius numbers slide nicely into the grass tools
+if ras.crs().toProj4()[6:13] == 'longlat':
+    shadowDiameter = int(numpy.ceil((shadowBoostWidthMetres*1.4/(pixelSizeBig*111139))) // 2 * 2 + 1)
+    diameterSize = int(numpy.ceil((radiusSize*2)/111139) // 2 * 2 + 1)
+else:
+    shadowDiameter = int(numpy.ceil((shadowBoostWidthMetres*1.4/pixelSizeBig)) // 2 * 2 + 1)
+    diameterSize = int(numpy.ceil((radiusSize*2)) // 2 * 2 + 1)
+diameterSizeThird = int(numpy.ceil(diameterSize/3) // 2 * 2 + 1)
+
+#If the radius size is less than a pixel then there's a problem
+if ((radiusMetres/3) <= pixelSizeAve):
+    print("You must increase your radius size")
+    getToItOldBoy
+
+if ((radiusMetres/3) <= pixelSizeBig):
+    print("You must decrease your speed up factor or increase your radius")
+    getToItOldBoy
+
+if (shadowDiameter < 5):
+    print("You must increase your shadow boost width or decrease your speed up factor")
+    getToItOldBoy
+
+if (speedUpFactor < 1 or toneShiftFactor <= 0 or maxPixelChangeFactor <= 0 or clippingPreventionFactor < 0 or clippingPreventionFactor >= 1):
+    print("The parameters are invalid, please review")
+    getToItOldBoy
+    
+if (speedUpFactor == 1 or toneShiftFactor > 1 or maxPixelChangeFactor > 1 or clippingPreventionFactor >= 0.3 or radiusMetres < (3 * pixelSizeBig)):
+    print("The current parameters aren't recommended... but good luck")
+
+
+
+"""
+####################################################################################
+First check to make sure there isn't a significant tint, then prep for tiling
+"""
 
 
 #Let's see if tiling needs to be done 
@@ -121,13 +164,8 @@ if promptReply == QMessageBox.Yes:
     
     
     
-    """
-    ####################################################################################
-    First check to make sure there isn't a significant tint, then prep for tiling
-    """
-    
     #Get some stats about the raster
-    processing.run("gdal:warpreproject", {'INPUT':inImage,'SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':0,'NODATA':None,'TARGET_RESOLUTION':pixelSizeAve * 200,'OPTIONS':finalCompressOptions,'DATA_TYPE':1,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':'','OUTPUT':processDirectory + 'LowResCopy.tif'})
+    processing.run("gdal:warpreproject", {'INPUT':inImage,'SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':0,'NODATA':None,'TARGET_RESOLUTION':pixelSizeAve * 250,'OPTIONS':finalCompressOptions,'DATA_TYPE':1,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':'','OUTPUT':processDirectory + 'LowResCopy.tif'})
     processing.run("native:rasterlayerstatistics", {'INPUT':processDirectory + 'LowResCopy.tif','BAND':1,'OUTPUT_HTML_FILE':processDirectory + inImageName + 'RedStats.html'})
     processing.run("native:rasterlayerstatistics", {'INPUT':processDirectory + 'LowResCopy.tif','BAND':2,'OUTPUT_HTML_FILE':processDirectory + inImageName + 'GreenStats.html'})
     processing.run("native:rasterlayerstatistics", {'INPUT':processDirectory + 'LowResCopy.tif','BAND':3,'OUTPUT_HTML_FILE':processDirectory + inImageName + 'BlueStats.html'})
@@ -215,19 +253,22 @@ if promptReply == QMessageBox.Yes:
     QgsProject.instance().removeMapLayer(bufferedExtentVector.id())
     
     
+    #Use minis in a grid so that excess areas aren't rendered
     processing.run("native:creategrid", {'TYPE':2,'EXTENT':bufferedExtentRectangle,'HSPACING':pixelSizeX * 100,'VSPACING':pixelSizeY * 100,'HOVERLAY':0,'VOVERLAY':0,'CRS':bufferedExtentCrs,'OUTPUT':processDirectory + inImageName + 'ExtentFixFiltGridMinis.gpkg'})
-
 
     processing.run("native:joinattributesbylocation", {'INPUT':processDirectory + inImageName + 'ExtentFixFiltGridMinis.gpkg','JOIN':processDirectory + inImageName + 'ExtentFixFiltGridBuffer.gpkg',
     'PREDICATE':[0],'JOIN_FIELDS':[],'METHOD':0,'DISCARD_NONMATCHING':False,'PREFIX':'tile','OUTPUT':processDirectory + inImageName + 'ExtentFixFiltGridMinisSelected.gpkg'})
     
     processing.run("native:dissolve", {'INPUT':processDirectory + inImageName + 'ExtentFixFiltGridMinisSelected.gpkg','FIELD':['tileid'],'OUTPUT':processDirectory + inImageName + 'ExtentFixFiltGridMinisSelectedDissolve.gpkg'})
 
-    #Only grab the part of the grid that will actually be relevant
-    ###processing.run("native:extractbylocation", {'INPUT':processDirectory + inImageName + 'ExtentFiltGridBuffer.gpkg','PREDICATE':[0,4,5],'INTERSECT':processDirectory + inImageName + 'ExtentFilt.gpkg','OUTPUT':processDirectory + inImageName + 'ExtentFiltGridBufferGrabbed.gpkg'})
+
+    processing.run("native:extractbylocation", {'INPUT':processDirectory + inImageName + 'ExtentFixFiltGridMinisSelectedDissolve.gpkg','PREDICATE':[0,4,5],'INTERSECT':processDirectory + inImageName + 'ExtentFixFilt.gpkg','OUTPUT':processDirectory + inImageName + 'ExtentFixFiltGridMinisSelectedDissolveGrabbed.gpkg'})
 
     #Split it out so there is a different extent to work from for each instance of the raster clipping
-    processing.run("native:splitvectorlayer", {'INPUT':processDirectory + inImageName + 'ExtentFixFiltGridMinisSelectedDissolve.gpkg','FIELD':'tileid','FILE_TYPE':0,'OUTPUT':processBoundsDirectory})
+    processing.run("native:splitvectorlayer", {'INPUT':processDirectory + inImageName + 'ExtentFixFiltGridMinisSelectedDissolveGrabbed.gpkg','FIELD':'tileid','FILE_TYPE':0,'OUTPUT':processBoundsDirectory})
+    
+    
+
     
     """
     #################################################################################################
@@ -351,10 +392,7 @@ inImageTileFiles = glob.glob(inImageTileDir + '*.tif')
 
 #Make sure the parent process folder exists
 processTileDirectoryWOutNumber = inImageTileDir + 'Processing/' 
-try:
-    os.mkdir(processTileDirectoryWOutNumber)
-except :
-    print("...")
+if not os.path.exists(processTileDirectoryWOutNumber): os.mkdir(processTileDirectoryWOutNumber)
 
 
 """
@@ -365,210 +403,163 @@ Starting up the for-loop...
 #Let's process each of the images one by one
 runNumber = 0
 for inImageTile in inImageTileFiles:
-    
-    runNumber = runNumber + 1
-    inImageTile = inImageTile.replace('\\','/')
-    #Set up the layer name for the raster calculations
-    inImageTileName = inImageTile.split("/")[-1]
-    inImageTileName = inImageTileName.split(".")[0]
-    
-
-    #Make sure that the processing folder exists
-    processTileDirectory = processTileDirectoryWOutNumber + inImageTileName + '/'
     try:
-        os.mkdir(processTileDirectory)
-    except:
-        boundsFiles = glob.glob(processTileDirectory + '*')
-        for f in boundsFiles:
-            os.remove(f)
-    
-    
-    #Get the pixel size of the raster
-    ras = QgsRasterLayer(inImageTile)
-    pixelSizeX = ras.rasterUnitsPerPixelX()
-    pixelSizeY = ras.rasterUnitsPerPixelY()
-    pixelSizeX = ras.rasterUnitsPerPixelX()
-    pixelSizeAve = (pixelSizeX + pixelSizeY) / 2
-    rasExtent = ras.extent()
-    
-    #Now set up some internal variables
-    pixelSizeBig = pixelSizeAve * speedUpFactor
-    radiusSize = radiusMetres/pixelSizeBig
-    
-    #Make sure the radius numbers slide nicely into the grass tools
-    if ras.crs().toProj4()[6:13] == 'longlat':
-        shadowDiameter = int(numpy.ceil((shadowBoostWidthMetres*1.4/(pixelSizeBig*111139))) // 2 * 2 + 1)
-        diameterSize = int(numpy.ceil((radiusSize*2)/111139) // 2 * 2 + 1)
-    else:
-        shadowDiameter = int(numpy.ceil((shadowBoostWidthMetres*1.4/pixelSizeBig)) // 2 * 2 + 1)
-        diameterSize = int(numpy.ceil((radiusSize*2)) // 2 * 2 + 1)
-    diameterSizeThird = int(numpy.ceil(diameterSize/3) // 2 * 2 + 1)
-
-    #If the radius size is less than a pixel then there's a problem
-    if ((radiusMetres/3) <= pixelSizeAve):
-        print("You must increase your radius size")
-        getToItOldBoy
-
-    if ((radiusMetres/3) <= pixelSizeBig):
-        print("You must decrease your speed up factor or increase your radius")
-        getToItOldBoy
-    
-    if (shadowDiameter < 5):
-        print("You must increase your shadow boost width or decrease your speed up factor")
-        getToItOldBoy
-    
-    if (speedUpFactor < 1 or toneShiftFactor <= 0 or maxPixelChangeFactor <= 0 or clippingPreventionFactor < 0 or clippingPreventionFactor >= 1):
-        print("The parameters are invalid, please review")
-        getToItOldBoy
         
-    if (speedUpFactor == 1 or toneShiftFactor > 1 or maxPixelChangeFactor > 1 or clippingPreventionFactor >= 0.3 or radiusMetres < (3 * pixelSizeBig)):
-        print("The current parameters aren't recommended... but good luck")
+        runNumber = runNumber + 1
+        inImageTile = inImageTile.replace('\\','/')
+        #Set up the layer name for the raster calculations
+        inImageTileName = inImageTile.split("/")[-1]
+        inImageTileName = inImageTileName.split(".")[0]
+        
 
-
-    #Clear out the folder
-    files = glob.glob(processTileDirectory + '*')
-    try:
-        for f in files:
-            os.remove(f)
-    except BaseException as e:
-        print("Bro we couldn't clear the files " + inImageTileName)
-        print(e)
-    
-
-
-
-    """
-    ###########################################################################
-    Setting it up for the bigger processing
-    """
-
-    print("Initial processing")
-
-    #Combine the bands to determine a total brightness
-    processing.run("gdal:rastercalculator", {'INPUT_A': inImageTile ,'BAND_A':1,'INPUT_B':inImageTile,'BAND_B':2,'INPUT_C':inImageTile,'BAND_C':3,'INPUT_D':inImageTile,'BAND_D':4,'FORMULA':'(D>128)*(((A.astype(numpy.float64))+(B.astype(numpy.float64))+(C.astype(numpy.float64)))/3)+((D<129)*(-1))','RTYPE':1,'NO_DATA':-1,'OPTIONS':compressOptions,'EXTRA':'','OUTPUT':processTileDirectory + 'CombinedBands.tif'})
-    
-    #Reduce res for quicker processing
-    processing.run("gdal:translate", {'INPUT':inImageTile,'TARGET_CRS':None,'NODATA':None,'COPY_SUBDATASETS':False,'OPTIONS':compressOptions,'EXTRA':'-r cubic -tr ' + str(pixelSizeBig) + ' ' + str(pixelSizeBig) + ' -b 1','DATA_TYPE':0,'OUTPUT':processTileDirectory + 'ReducedResRed.tif'})
-    processing.run("gdal:translate", {'INPUT':inImageTile,'TARGET_CRS':None,'NODATA':None,'COPY_SUBDATASETS':False,'OPTIONS':compressOptions,'EXTRA':'-r cubic -tr ' + str(pixelSizeBig) + ' ' + str(pixelSizeBig) + ' -b 2','DATA_TYPE':0,'OUTPUT':processTileDirectory + 'ReducedResGreen.tif'})
-    processing.run("gdal:translate", {'INPUT':inImageTile,'TARGET_CRS':None,'NODATA':None,'COPY_SUBDATASETS':False,'OPTIONS':compressOptions,'EXTRA':'-r cubic -tr ' + str(pixelSizeBig) + ' ' + str(pixelSizeBig) + ' -b 3','DATA_TYPE':0,'OUTPUT':processTileDirectory + 'ReducedResBlue.tif'})
-
-    #Calculate the minimum and maximum among all bands
-    processing.run("grass7:r.series", {'input':[processTileDirectory + 'ReducedResBlue.tif',processTileDirectory + 'ReducedResGreen.tif',processTileDirectory + 'ReducedResRed.tif'],'-n':True,'method':[4],'quantile':'','weights':'','output':processTileDirectory + 'TrueMinimum.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
-    processing.run("grass7:r.series", {'input':[processTileDirectory + 'ReducedResBlue.tif',processTileDirectory + 'ReducedResGreen.tif',processTileDirectory + 'ReducedResRed.tif'],'-n':True,'method':[6],'quantile':'','weights':'','output':processTileDirectory + 'TrueMaximum.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
-
-    #Reduce the resolution for the combined bands, bilinear and the scale parameters are used to prevent values from being 0, which causes glitches in grass tools
-    processing.run("gdal:translate", {'INPUT':processTileDirectory + 'CombinedBands.tif','TARGET_CRS':None,'NODATA':None,'COPY_SUBDATASETS':False,'OPTIONS':compressOptions,'EXTRA':'-r bilinear -tr ' + str(pixelSizeBig) + ' ' + str(pixelSizeBig) + ' -b 1 -scale 0 255 1 255','DATA_TYPE':0,'OUTPUT':processTileDirectory + 'ReducedResCombined.tif'})
-
-
-    """
-    ##########################################################################
-    Find the shadowed areas for later correction
-    """
-    
-    #Shadow area A
-    #Grab pixels that are very dark
-    processing.run("qgis:rastercalculator", {'EXPRESSION':'8/(1+1.15^(\"ReducedResCombined@1\"-30))','LAYERS':[processTileDirectory + 'ReducedResCombined.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'ShadowChanceA.tif'})
-    #Determine where the bigger areas are
-    processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'ShadowChanceA.tif','selection':processTileDirectory + 'ShadowChanceA.tif','method':15,'size':shadowDiameter - 2,'gauss':None,'quantile':'0.10','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'ShadowChanceASmooth.tif','nprocs':8,'GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
-    #Confirming the bigger shadow parts
-    processing.run("qgis:rastercalculator", {'EXPRESSION':'(\"ShadowChanceA@1\"^0.2)  *  (\"ShadowChanceASmooth@1\" ^ 0.7)','LAYERS':[processTileDirectory + 'ShadowChanceASmooth.tif',processTileDirectory + 'ShadowChanceA.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'ShadowChanceAMultiply.tif'})
-    #Give approval for the shadow area B to spread 
-    processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'ShadowChanceAMultiply.tif','selection':processTileDirectory + 'ShadowChanceAMultiply.tif','method':0,'size':shadowDiameter,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'ShadowChanceAMultiplyApproval.tif','nprocs':8,'GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
-
-    #Shadow area B
-    #Grab pixels that are fairly dark
-    processing.run("qgis:rastercalculator", {'EXPRESSION':'8/(1+1.15^(\"ReducedResCombined@1\"-52))','LAYERS':[processTileDirectory + 'ReducedResCombined.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'ShadowChanceB.tif'})
-    #Determine where the bigger areas are
-    processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'ShadowChanceB.tif','selection':processTileDirectory + 'ShadowChanceB.tif','method':15,'size':shadowDiameter,'gauss':None,'quantile':'0.28','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'ShadowChanceBSmooth.tif','nprocs':8,'GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
-    #Confirming the bigger shadow parts as approved by shadow area A
-    processing.run("qgis:rastercalculator",{'EXPRESSION':'(\"ShadowChanceB@1\"^0.2)  *  (\"ShadowChanceBSmooth@1\" ^ 0.6) * ((\"ShadowChanceAMultiplyApproval@1\" ^ 0.5) + 0.1)','LAYERS':[processTileDirectory + 'ShadowChanceBSmooth.tif',processTileDirectory + 'ShadowChanceB.tif',processTileDirectory + 'ShadowChanceAMultiplyApproval.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'ShadowChanceBMultiply.tif'})
-    #Give approval for the shadow area C to spread 
-    processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'ShadowChanceBMultiply.tif','selection':processTileDirectory + 'ShadowChanceBMultiply.tif','method':15,'size':shadowDiameter + 2,'gauss':None,'quantile':'0.92','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'ShadowChanceBMultiplyApproval.tif','nprocs':8,'GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
-    
-    #Shadow area C
-    #Grab pixels that are somewhat dark
-    processing.run("qgis:rastercalculator", {'EXPRESSION':'8/(1+1.15^(\"ReducedResCombined@1\"-85))','LAYERS':[processTileDirectory + 'ReducedResCombined.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'ShadowChanceC.tif'})
-    #Determine where the bigger areas are
-    processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'ShadowChanceC.tif','selection':processTileDirectory + 'ShadowChanceC.tif','method':15,'size':shadowDiameter,'gauss':None,'quantile':'0.4','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'ShadowChanceCSmooth.tif','nprocs':8,'GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
-    #Confirming the bigger shadow parts as approved by shadow area B
-    processing.run("qgis:rastercalculator",{'EXPRESSION':'(\"ShadowChanceC@1\"^0.2)  *  (\"ShadowChanceCSmooth@1\" ^ 0.6) * ((\"ShadowChanceBMultiplyApproval@1\" ^ 0.6)) * ' + str(shadowBoostFactor),'LAYERS':[processTileDirectory + 'ShadowChanceCSmooth.tif',processTileDirectory + 'ShadowChanceC.tif',processTileDirectory + 'ShadowChanceBMultiplyApproval.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'ShadowChanceCMultiply.tif'})
-    #Bring out to full res
-    processing.run("gdal:warpreproject", {'INPUT':processTileDirectory + 'ShadowChanceCMultiply.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':3,'NODATA':None,'TARGET_RESOLUTION':pixelSizeAve,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory + 'ShadowBoostFinal.tif'})
-    
-    
-    """
-    ##########################################################################
-    Determining the difference to apply based on the larger radius
-    """
-
-    print("Speed up factor engaged")
-    print("(Increase the speed up factor if this part takes too long)")
-
-
-    #Calculate the minimum and maximum of the combined bands within the radius
-    processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'ReducedResCombined.tif','selection':processTileDirectory + 'ReducedResCombined.tif','method':4,'size':diameterSize,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'MaximumCombined.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
-    processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'ReducedResCombined.tif','selection':processTileDirectory + 'ReducedResCombined.tif','method':3,'size':diameterSize,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'MinimumCombined.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
-
-
-    #Smooth off those hard edges
-    processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'MaximumCombined.tif','selection':processTileDirectory + 'MinimumCombined.tif','method':0,'size':diameterSize,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'MaximumSmooth.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
-    processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'MinimumCombined.tif','selection':processTileDirectory + 'MinimumCombined.tif','method':0,'size':diameterSize,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'MinimumSmooth.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
-
-
-    #Scale the amount that the midtone is allowed to be moved
-    processing.run("qgis:rastercalculator", {'EXPRESSION':' \"MinimumSmooth@1\" ^ ' + str(toneShiftFactor),'LAYERS':[processTileDirectory + 'MinimumSmooth.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'MinimumSmoothScaled.tif'})
-    processing.run("qgis:rastercalculator", {'EXPRESSION':' (((abs(\"MaximumSmooth@1\"-255))^ '+ str(toneShiftFactor)+ ')*-1)+255 ' ,'LAYERS':[processTileDirectory + 'MaximumSmooth.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'MaximumSmoothScaled.tif'})
-
-
-    #Use the min and max to calculate range and midrange
-    processing.run("qgis:rastercalculator", {'EXPRESSION':'\"MaximumSmoothScaled@1\" - \"MinimumSmoothScaled@1\"','LAYERS':[processTileDirectory + 'MaximumSmoothScaled.tif',processTileDirectory + 'MinimumSmoothScaled.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'Range.tif'})
-    processing.run("qgis:rastercalculator", {'EXPRESSION':'(\"MaximumSmoothScaled@1\" + \"MinimumSmoothScaled@1\")/2','LAYERS':[processTileDirectory + 'MaximumSmoothScaled.tif',processTileDirectory + 'MinimumSmoothScaled.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'Midrange.tif'})
-
-
-    #Bring the res back out to full
-    processing.run("gdal:warpreproject", {'INPUT':processTileDirectory + 'Range.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':3,'NODATA':None,'TARGET_RESOLUTION':pixelSizeAve,'OPTIONS':compressOptions,'DATA_TYPE':0,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory + 'RangeResamp.tif'})
-    processing.run("gdal:warpreproject", {'INPUT':processTileDirectory + 'Midrange.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':3,'NODATA':None,'TARGET_RESOLUTION':pixelSizeAve,'OPTIONS':compressOptions,'DATA_TYPE':0,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory + 'MidrangeResamp.tif'})
-
-
-
-    #Look for potential clipping
-    processing.run("qgis:rastercalculator", {'EXPRESSION':'(\"TrueMaximum@1\" - \"Midrange@1\")*((255/(\"Range@1\"+1)))-128','LAYERS':[processTileDirectory + 'TrueMaximum.tif',processTileDirectory + 'Midrange.tif',processTileDirectory + 'Range.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'WhiteClip.tif','OPTIONS': compressOptions})
-    processing.run("qgis:rastercalculator", {'EXPRESSION':'-(\"TrueMinimum@1\" - \"Midrange@1\")*((255/(\"Range@1\"+1)))-128','LAYERS':[processTileDirectory + 'TrueMinimum.tif',processTileDirectory + 'Midrange.tif',processTileDirectory + 'Range.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'BlackClip.tif','OPTIONS': compressOptions})
-    processing.run("gdal:warpreproject", {'INPUT':processTileDirectory + 'WhiteClip.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':0,'NODATA':None,'TARGET_RESOLUTION':None,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory + 'WhiteClipByte.tif'})
-    processing.run("gdal:warpreproject", {'INPUT':processTileDirectory + 'BlackClip.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':0,'NODATA':None,'TARGET_RESOLUTION':None,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory + 'BlackClipByte.tif'})
-    processing.run("gdal:warpreproject", {'INPUT':processTileDirectory + 'WhiteClipByte.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':7,'NODATA':None,'TARGET_RESOLUTION':pixelSizeBig * 4,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory + 'WhiteClipByteExpand.tif'})
-    processing.run("gdal:warpreproject", {'INPUT':processTileDirectory + 'BlackClipByte.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':7,'NODATA':None,'TARGET_RESOLUTION':pixelSizeBig * 4,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory + 'BlackClipByteExpand.tif'})
-    processing.run("gdal:warpreproject", {'INPUT':processTileDirectory + 'WhiteClipByteExpand.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':3,'NODATA':None,'TARGET_RESOLUTION':pixelSizeBig,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory + 'WhiteClipByteExpandSmooth.tif'})
-    processing.run("gdal:warpreproject", {'INPUT':processTileDirectory + 'BlackClipByteExpand.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':3,'NODATA':None,'TARGET_RESOLUTION':pixelSizeBig,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory + 'BlackClipByteExpandSmooth.tif'})
-    
-
-    #Use the determined formula to figure out what difference needs to be applied to the pixels to stretch them to 0-255
-    #0.85 is a factor to increase the effect of the larger radius
-    processing.run("qgis:rastercalculator", {'EXPRESSION':'((\"CombinedBands@1\" - \"MidrangeResamp@1\")*((255/(\"RangeResamp@1\"+1)))+128 - \"CombinedBands@1\") / 0.80','LAYERS':[processTileDirectory + 'CombinedBands.tif',processTileDirectory + 'MidrangeResamp.tif',processTileDirectory + 'RangeResamp.tif'],'CELLSIZE':0,'EXTENT':rasExtent,'CRS':None,'OUTPUT':processTileDirectory + 'DifferenceToApply.tif','OPTIONS': compressOptions})
-    
-    
-    """
-    ###########################################################################
-    Determining the difference to apply based on the smaller radius
-    """
-
-    #Calculate the minimum and maximum of the combined bands within the radius
-    processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'ReducedResCombined.tif','selection':processTileDirectory + 'ReducedResCombined.tif','method':4,'size':diameterSizeThird,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'MaximumCombinedThird.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
-    processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'ReducedResCombined.tif','selection':processTileDirectory + 'ReducedResCombined.tif','method':3,'size':diameterSizeThird,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'MinimumCombinedThird.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
-
-    #Smooth off those hard edges
-    processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'MaximumCombinedThird.tif','selection':processTileDirectory + 'MaximumCombinedThird.tif','method':0,'size':diameterSizeThird,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'MaximumSmoothThird.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
-    processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'MinimumCombinedThird.tif','selection':processTileDirectory + 'MinimumCombinedThird.tif','method':0,'size':diameterSizeThird,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'MinimumSmoothThird.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
-
-    """
-    ###########################################################################
-    Start up the non-grass task
-    """
-    
-    def processEachList(task, taskProcessTileDirectory, taskInImageTileName, taskInImageTile, taskRasExtent):
-    
+        #Make sure that the processing folder exists
+        processTileDirectory = processTileDirectoryWOutNumber + inImageTileName + '/'
         try:
-            
+            os.mkdir(processTileDirectory)
+        except:
+            boundsFiles = glob.glob(processTileDirectory + '*')
+            for f in boundsFiles:
+                os.remove(f)
+
+        #Clear out the folder
+        files = glob.glob(processTileDirectory + '*')
+        try:
+            for f in files:
+                os.remove(f)
+        except BaseException as e:
+            print("Bro we couldn't clear the files " + inImageTileName)
+            print(e)
+
+        """
+        ###########################################################################
+        Setting it up for the bigger processing
+        """
+
+        print("Initial processing")
+
+        #Combine the bands to determine a total brightness
+        processing.run("gdal:rastercalculator", {'INPUT_A': inImageTile ,'BAND_A':1,'INPUT_B':inImageTile,'BAND_B':2,'INPUT_C':inImageTile,'BAND_C':3,'INPUT_D':inImageTile,'BAND_D':4,'FORMULA':'(D>128)*(((A.astype(numpy.float64))+(B.astype(numpy.float64))+(C.astype(numpy.float64)))/3)+((D<129)*(-1))','RTYPE':1,'NO_DATA':-1,'OPTIONS':compressOptions,'EXTRA':'','OUTPUT':processTileDirectory + 'CombinedBands.tif'})
+        
+        #Reduce res for quicker processing
+        processing.run("gdal:translate", {'INPUT':inImageTile,'TARGET_CRS':None,'NODATA':None,'COPY_SUBDATASETS':False,'OPTIONS':compressOptions,'EXTRA':'-r cubic -tr ' + str(pixelSizeBig) + ' ' + str(pixelSizeBig) + ' -b 1','DATA_TYPE':0,'OUTPUT':processTileDirectory + 'ReducedResRed.tif'})
+        processing.run("gdal:translate", {'INPUT':inImageTile,'TARGET_CRS':None,'NODATA':None,'COPY_SUBDATASETS':False,'OPTIONS':compressOptions,'EXTRA':'-r cubic -tr ' + str(pixelSizeBig) + ' ' + str(pixelSizeBig) + ' -b 2','DATA_TYPE':0,'OUTPUT':processTileDirectory + 'ReducedResGreen.tif'})
+        processing.run("gdal:translate", {'INPUT':inImageTile,'TARGET_CRS':None,'NODATA':None,'COPY_SUBDATASETS':False,'OPTIONS':compressOptions,'EXTRA':'-r cubic -tr ' + str(pixelSizeBig) + ' ' + str(pixelSizeBig) + ' -b 3','DATA_TYPE':0,'OUTPUT':processTileDirectory + 'ReducedResBlue.tif'})
+
+        #Calculate the minimum and maximum among all bands
+        processing.run("grass7:r.series", {'input':[processTileDirectory + 'ReducedResBlue.tif',processTileDirectory + 'ReducedResGreen.tif',processTileDirectory + 'ReducedResRed.tif'],'-n':True,'method':[4],'quantile':'','weights':'','output':processTileDirectory + 'TrueMinimum.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
+        processing.run("grass7:r.series", {'input':[processTileDirectory + 'ReducedResBlue.tif',processTileDirectory + 'ReducedResGreen.tif',processTileDirectory + 'ReducedResRed.tif'],'-n':True,'method':[6],'quantile':'','weights':'','output':processTileDirectory + 'TrueMaximum.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
+
+        #Reduce the resolution for the combined bands, bilinear and the scale parameters are used to prevent values from being 0, which causes glitches in grass tools
+        processing.run("gdal:translate", {'INPUT':processTileDirectory + 'CombinedBands.tif','TARGET_CRS':None,'NODATA':None,'COPY_SUBDATASETS':False,'OPTIONS':compressOptions,'EXTRA':'-r bilinear -tr ' + str(pixelSizeBig) + ' ' + str(pixelSizeBig) + ' -b 1 -scale 0 255 1 255','DATA_TYPE':0,'OUTPUT':processTileDirectory + 'ReducedResCombined.tif'})
+
+
+        """
+        ##########################################################################
+        Find the shadowed areas for later correction
+        """
+        
+        #Shadow area A
+        #Grab pixels that are very dark
+        processing.run("qgis:rastercalculator", {'EXPRESSION':'8/(1+1.15^(\"ReducedResCombined@1\"-30))','LAYERS':[processTileDirectory + 'ReducedResCombined.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'ShadowChanceA.tif'})
+        #Determine where the bigger areas are
+        processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'ShadowChanceA.tif','selection':processTileDirectory + 'ShadowChanceA.tif','method':15,'size':shadowDiameter - 2,'gauss':None,'quantile':'0.10','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'ShadowChanceASmooth.tif','nprocs':8,'GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
+        #Confirming the bigger shadow parts
+        processing.run("qgis:rastercalculator", {'EXPRESSION':'(\"ShadowChanceA@1\"^0.2)  *  (\"ShadowChanceASmooth@1\" ^ 0.7)','LAYERS':[processTileDirectory + 'ShadowChanceASmooth.tif',processTileDirectory + 'ShadowChanceA.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'ShadowChanceAMultiply.tif'})
+        #Give approval for the shadow area B to spread 
+        processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'ShadowChanceAMultiply.tif','selection':processTileDirectory + 'ShadowChanceAMultiply.tif','method':0,'size':shadowDiameter,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'ShadowChanceAMultiplyApproval.tif','nprocs':8,'GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
+
+        #Shadow area B
+        #Grab pixels that are fairly dark
+        processing.run("qgis:rastercalculator", {'EXPRESSION':'8/(1+1.15^(\"ReducedResCombined@1\"-52))','LAYERS':[processTileDirectory + 'ReducedResCombined.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'ShadowChanceB.tif'})
+        #Determine where the bigger areas are
+        processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'ShadowChanceB.tif','selection':processTileDirectory + 'ShadowChanceB.tif','method':15,'size':shadowDiameter,'gauss':None,'quantile':'0.28','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'ShadowChanceBSmooth.tif','nprocs':8,'GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
+        #Confirming the bigger shadow parts as approved by shadow area A
+        processing.run("qgis:rastercalculator",{'EXPRESSION':'(\"ShadowChanceB@1\"^0.2)  *  (\"ShadowChanceBSmooth@1\" ^ 0.6) * ((\"ShadowChanceAMultiplyApproval@1\" ^ 0.5) + 0.1)','LAYERS':[processTileDirectory + 'ShadowChanceBSmooth.tif',processTileDirectory + 'ShadowChanceB.tif',processTileDirectory + 'ShadowChanceAMultiplyApproval.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'ShadowChanceBMultiply.tif'})
+        #Give approval for the shadow area C to spread 
+        processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'ShadowChanceBMultiply.tif','selection':processTileDirectory + 'ShadowChanceBMultiply.tif','method':15,'size':shadowDiameter + 2,'gauss':None,'quantile':'0.92','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'ShadowChanceBMultiplyApproval.tif','nprocs':8,'GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
+        
+        #Shadow area C
+        #Grab pixels that are somewhat dark
+        processing.run("qgis:rastercalculator", {'EXPRESSION':'8/(1+1.15^(\"ReducedResCombined@1\"-85))','LAYERS':[processTileDirectory + 'ReducedResCombined.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'ShadowChanceC.tif'})
+        #Determine where the bigger areas are
+        processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'ShadowChanceC.tif','selection':processTileDirectory + 'ShadowChanceC.tif','method':15,'size':shadowDiameter,'gauss':None,'quantile':'0.4','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'ShadowChanceCSmooth.tif','nprocs':8,'GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
+        #Confirming the bigger shadow parts as approved by shadow area B
+        processing.run("qgis:rastercalculator",{'EXPRESSION':'(\"ShadowChanceC@1\"^0.2)  *  (\"ShadowChanceCSmooth@1\" ^ 0.6) * ((\"ShadowChanceBMultiplyApproval@1\" ^ 0.6)) * ' + str(shadowBoostFactor),'LAYERS':[processTileDirectory + 'ShadowChanceCSmooth.tif',processTileDirectory + 'ShadowChanceC.tif',processTileDirectory + 'ShadowChanceBMultiplyApproval.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'ShadowChanceCMultiply.tif'})
+        #Bring out to full res
+        processing.run("gdal:warpreproject", {'INPUT':processTileDirectory + 'ShadowChanceCMultiply.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':3,'NODATA':None,'TARGET_RESOLUTION':pixelSizeAve,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory + 'ShadowBoostFinal.tif'})
+        
+        
+        """
+        ##########################################################################
+        Determining the difference to apply based on the larger radius
+        """
+
+        print("Speed up factor engaged")
+        print("(Increase the speed up factor if this part takes too long)")
+
+
+        #Calculate the minimum and maximum of the combined bands within the radius
+        processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'ReducedResCombined.tif','selection':processTileDirectory + 'ReducedResCombined.tif','method':4,'size':diameterSize,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'MaximumCombined.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
+        processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'ReducedResCombined.tif','selection':processTileDirectory + 'ReducedResCombined.tif','method':3,'size':diameterSize,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'MinimumCombined.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
+
+
+        #Smooth off those hard edges
+        processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'MaximumCombined.tif','selection':processTileDirectory + 'MinimumCombined.tif','method':0,'size':diameterSize,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'MaximumSmooth.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
+        processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'MinimumCombined.tif','selection':processTileDirectory + 'MinimumCombined.tif','method':0,'size':diameterSize,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'MinimumSmooth.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
+
+
+        #Scale the amount that the midtone is allowed to be moved
+        processing.run("qgis:rastercalculator", {'EXPRESSION':' \"MinimumSmooth@1\" ^ ' + str(toneShiftFactor),'LAYERS':[processTileDirectory + 'MinimumSmooth.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'MinimumSmoothScaled.tif'})
+        processing.run("qgis:rastercalculator", {'EXPRESSION':' (((abs(\"MaximumSmooth@1\"-255))^ '+ str(toneShiftFactor)+ ')*-1)+255 ' ,'LAYERS':[processTileDirectory + 'MaximumSmooth.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'MaximumSmoothScaled.tif'})
+
+
+        #Use the min and max to calculate range and midrange
+        processing.run("qgis:rastercalculator", {'EXPRESSION':'\"MaximumSmoothScaled@1\" - \"MinimumSmoothScaled@1\"','LAYERS':[processTileDirectory + 'MaximumSmoothScaled.tif',processTileDirectory + 'MinimumSmoothScaled.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'Range.tif'})
+        processing.run("qgis:rastercalculator", {'EXPRESSION':'(\"MaximumSmoothScaled@1\" + \"MinimumSmoothScaled@1\")/2','LAYERS':[processTileDirectory + 'MaximumSmoothScaled.tif',processTileDirectory + 'MinimumSmoothScaled.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'Midrange.tif'})
+
+
+        #Bring the res back out to full
+        processing.run("gdal:warpreproject", {'INPUT':processTileDirectory + 'Range.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':3,'NODATA':None,'TARGET_RESOLUTION':pixelSizeAve,'OPTIONS':compressOptions,'DATA_TYPE':0,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory + 'RangeResamp.tif'})
+        processing.run("gdal:warpreproject", {'INPUT':processTileDirectory + 'Midrange.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':3,'NODATA':None,'TARGET_RESOLUTION':pixelSizeAve,'OPTIONS':compressOptions,'DATA_TYPE':0,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory + 'MidrangeResamp.tif'})
+
+
+
+        #Look for potential clipping
+        processing.run("qgis:rastercalculator", {'EXPRESSION':'(\"TrueMaximum@1\" - \"Midrange@1\")*((255/(\"Range@1\"+1)))-128','LAYERS':[processTileDirectory + 'TrueMaximum.tif',processTileDirectory + 'Midrange.tif',processTileDirectory + 'Range.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'WhiteClip.tif','OPTIONS': compressOptions})
+        processing.run("qgis:rastercalculator", {'EXPRESSION':'-(\"TrueMinimum@1\" - \"Midrange@1\")*((255/(\"Range@1\"+1)))-128','LAYERS':[processTileDirectory + 'TrueMinimum.tif',processTileDirectory + 'Midrange.tif',processTileDirectory + 'Range.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'BlackClip.tif','OPTIONS': compressOptions})
+        processing.run("gdal:warpreproject", {'INPUT':processTileDirectory + 'WhiteClip.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':0,'NODATA':None,'TARGET_RESOLUTION':None,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory + 'WhiteClipByte.tif'})
+        processing.run("gdal:warpreproject", {'INPUT':processTileDirectory + 'BlackClip.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':0,'NODATA':None,'TARGET_RESOLUTION':None,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory + 'BlackClipByte.tif'})
+        processing.run("gdal:warpreproject", {'INPUT':processTileDirectory + 'WhiteClipByte.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':7,'NODATA':None,'TARGET_RESOLUTION':pixelSizeBig * 4,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory + 'WhiteClipByteExpand.tif'})
+        processing.run("gdal:warpreproject", {'INPUT':processTileDirectory + 'BlackClipByte.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':7,'NODATA':None,'TARGET_RESOLUTION':pixelSizeBig * 4,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory + 'BlackClipByteExpand.tif'})
+        processing.run("gdal:warpreproject", {'INPUT':processTileDirectory + 'WhiteClipByteExpand.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':3,'NODATA':None,'TARGET_RESOLUTION':pixelSizeBig,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory + 'WhiteClipByteExpandSmooth.tif'})
+        processing.run("gdal:warpreproject", {'INPUT':processTileDirectory + 'BlackClipByteExpand.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':3,'NODATA':None,'TARGET_RESOLUTION':pixelSizeBig,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory + 'BlackClipByteExpandSmooth.tif'})
+        
+
+        #Use the determined formula to figure out what difference needs to be applied to the pixels to stretch them to 0-255
+        #0.85 is a factor to increase the effect of the larger radius
+        processing.run("qgis:rastercalculator", {'EXPRESSION':'((\"CombinedBands@1\" - \"MidrangeResamp@1\")*((255/(\"RangeResamp@1\"+1)))+128 - \"CombinedBands@1\") / 0.80','LAYERS':[processTileDirectory + 'CombinedBands.tif',processTileDirectory + 'MidrangeResamp.tif',processTileDirectory + 'RangeResamp.tif'],'CELLSIZE':0,'EXTENT':rasExtent,'CRS':None,'OUTPUT':processTileDirectory + 'DifferenceToApply.tif','OPTIONS': compressOptions})
+        
+        
+        """
+        ###########################################################################
+        Determining the difference to apply based on the smaller radius
+        """
+
+        #Calculate the minimum and maximum of the combined bands within the radius
+        processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'ReducedResCombined.tif','selection':processTileDirectory + 'ReducedResCombined.tif','method':4,'size':diameterSizeThird,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'MaximumCombinedThird.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
+        processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'ReducedResCombined.tif','selection':processTileDirectory + 'ReducedResCombined.tif','method':3,'size':diameterSizeThird,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'MinimumCombinedThird.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
+
+        #Smooth off those hard edges
+        processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'MaximumCombinedThird.tif','selection':processTileDirectory + 'MaximumCombinedThird.tif','method':0,'size':diameterSizeThird,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'MaximumSmoothThird.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
+        processing.run("grass7:r.neighbors", {'input':processTileDirectory + 'MinimumCombinedThird.tif','selection':processTileDirectory + 'MinimumCombinedThird.tif','method':0,'size':diameterSizeThird,'gauss':None,'quantile':'','-c':True,'-a':False,'weight':'','output':processTileDirectory + 'MinimumSmoothThird.tif','GRASS_REGION_PARAMETER':None,'GRASS_REGION_CELLSIZE_PARAMETER':0,'GRASS_RASTER_FORMAT_OPT':'','GRASS_RASTER_FORMAT_META':''})
+
+        """
+        ###########################################################################
+        Start up the non-grass task
+        """
+        
+        def processEachList(task, taskProcessTileDirectory, taskInImageTileName, taskInImageTile, taskRasExtent):
+                
             print("Applying the differences for" + taskInImageTile)
             print("Process dir" + taskProcessTileDirectory)
             
@@ -642,7 +633,7 @@ for inImageTile in inImageTileFiles:
             
             #Bring this in so that any border issues are taken away
             processing.run("native:buffer", {'INPUT':taskProcessTileDirectory + 'FullExtent.gpkg','DISTANCE':pixelSizeAve * (-2),'SEGMENTS':5,'END_CAP_STYLE':0,'JOIN_STYLE':0,'MITER_LIMIT':2,'DISSOLVE':False,'OUTPUT':taskProcessTileDirectory + 'FullExtentIn.gpkg'})
-            
+           
             #Then convert to lines so that
             processing.run("native:polygonstolines", {'INPUT':taskProcessTileDirectory + 'FullExtentIn.gpkg','OUTPUT':taskProcessTileDirectory + 'FullExtentInLines.gpkg'})
             
@@ -650,7 +641,13 @@ for inImageTile in inImageTileFiles:
             processing.run("gdal:rasterize", {'INPUT':taskProcessTileDirectory + 'FullExtentInLines.gpkg','FIELD':'','BURN':1,'UNITS':1,'WIDTH':pixelSizeX,'HEIGHT':pixelSizeY,'EXTENT':taskRasExtent,'NODATA':None,'OPTIONS':compressOptions,'DATA_TYPE':0,'INIT':None,'INVERT':False,'EXTRA':'','OUTPUT':taskProcessTileDirectory + 'FullExtentLinesRasterize.tif'})
             processing.run("gdal:proximity", {'INPUT':taskProcessTileDirectory + 'FullExtentLinesRasterize.tif','BAND':1,'VALUES':'1','UNITS':1,'MAX_DISTANCE':64,'REPLACE':None,'NODATA':64,'OPTIONS':compressOptions,'EXTRA':'','DATA_TYPE':0,'OUTPUT':taskProcessTileDirectory + 'FullExtentLinesRasterizeDistance.tif'})
             processing.run("qgis:rastercalculator", {'EXPRESSION':'\"FullExtentLinesRasterizeDistance@1\" * 4','LAYERS':[taskProcessTileDirectory + 'FullExtentLinesRasterizeDistance.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':taskProcessTileDirectory + 'AlphaBand.tif','OPTIONS': compressOptions})
-
+            
+            fullExtentVector = QgsVectorLayer(taskProcessTileDirectory + 'FullExtent.gpkg')
+            QgsProject.instance().addMapLayer(fullExtentVector, False)
+            QgsProject.instance().removeMapLayer(fullExtentVector.id())
+            fullExtentInVector = QgsVectorLayer(taskProcessTileDirectory + 'FullExtentIn.gpkg')
+            QgsProject.instance().addMapLayer(fullExtentInVector, False)
+            QgsProject.instance().removeMapLayer(fullExtentInVector.id())
 
             """
             ###########################################################################
@@ -698,30 +695,30 @@ for inImageTile in inImageTileFiles:
                 except BaseException as e:
                     e = e
                     
-        except BaseException as e:
-            print("Bro it failed " + inImageTileName)
-            print(e)
-            debugText = open(otherDirectory + inImageName + "Debug.txt","a+")
-            debugText.write(datetime.now().strftime("%Y%m%d %H%M%S") + ": So " + taskInImageTileName + ' failed to process. Error message is ' + e + '. Currently there are ' + str(QgsApplication.taskManager().countActiveTasks()) + ' tasks running. Free memory is ' + str(round(psutil.virtual_memory().free / 1000000000,1)) + 'gb. \n')
-            debugText.close()
-            
-    """
-    #######################################################################
-    Running all of the above through a task, before starting up the next tile in parallel
-    """
+            confirmationText = open(otherDirectory + 'ConfirmationFiles/' + taskInImageTileName + "Confirmation.txt","w+")
+            confirmationText.write(inImageTileName + ' confirmed complete')
+            confirmationText.close()    
+        
+        """
+        #######################################################################
+        Running all of the above through a task, before starting up the next tile in parallel
+        """
 
-    print("About to run the task for " + inImageTileName)
-    #Assign the functions to a Qgs task and run
-    beyondGrassTask = QgsTask.fromFunction(inImageTile + 'FirstOne', processEachList, processTileDirectory, inImageTileName, inImageTile, rasExtent)
-    
-    #Make sure that it is not until the final run through of the loop that next part of the process runs
-    if runNumber < len(inImageTileFiles):  
+        print("About to run the task for " + inImageTileName)
+        #Assign the functions to a Qgs task and run
+        beyondGrassTask = QgsTask.fromFunction(inImageTile + 'FirstOne', processEachList, processTileDirectory, inImageTileName, inImageTile, rasExtent)
+        
+        #Make sure that it is not until the final run through of the loop that next part of the process runs
         QgsApplication.taskManager().addTask(beyondGrassTask)
-    else:
-        finalBeyondGrassTask = beyondGrassTask
-        QgsApplication.taskManager().addTask(finalBeyondGrassTask)
-    
 
+    except BaseException as e:
+        print("Bro it failed " + inImageTileName)
+        print(e)
+        debugText = open(otherDirectory + inImageName + "Debug.txt","a+")
+        debugText.write(datetime.now().strftime("%Y%m%d %H%M%S") + ": So " + inImageTileName + ' failed to process. Error message is ' + str(e) + '. Currently there are ' + str(QgsApplication.taskManager().countActiveTasks()) + ' tasks running. Free memory is ' + str(round(psutil.virtual_memory().free / 1000000000,1)) + 'gb. \n')
+        debugText.close()
+
+    
 """
 #######################################################################
 Once all tiles are processed, they can be brought together
@@ -730,12 +727,20 @@ Once all tiles are processed, they can be brought together
 #This makes sure that the cmd process doesn't take off before the tiles are ready    
 print("Ok lets make sure the tasks (" + str(QgsApplication.taskManager().countActiveTasks()) + ") have finished before doing the final merge")
 
-try:
-    finalBeyondGrassTask.waitForFinished(timeout = 300000)
-except BaseException as e:
-    print(e)   
+numberOfTilesDone = 0
+while numberOfTilesDone < len(inImageTileFiles):
+    confirmationFiles = glob.glob(otherDirectory + 'ConfirmationFiles/' + '*.txt')
+    numberOfTilesDone = len(confirmationFiles)
+    debugText = open(otherDirectory + inImageName + "Debug.txt","a+")
+    debugText.write(str(numberOfTilesDone) + ' tiles done. ' + str(len(inImageTileFiles)) + ' total tiles. The time is ' + datetime.now().strftime("%Y%m%d %H%M%S"))
+    debugText.close()
     
-print("Ok so there are still " + str(QgsApplication.taskManager().countActiveTasks()) + "tasks running before the merge")
+    time.sleep(5)
+    
+    
+
+
+print("Ok so there are still " + str(QgsApplication.taskManager().countActiveTasks()) + " tasks running before the merge")
 
 
 #Prepare to make a final mosaic where the alpha bands are respected, this is a string being prepped for cmd
