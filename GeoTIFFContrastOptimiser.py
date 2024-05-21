@@ -12,8 +12,8 @@ User options for the tiling section
 """
 
 #Initial variable assignment
-inImage                 = 'C:/TempYourImage.tif' #E.g 'C:/Temp/BigImage.tif'
-approxPixelsPerTile     = 12000 #E.g 12000, this will vary based on your ram
+inImage                 = 'C:/Temp/Yourimage.tif' #E.g 'C:/Temp/BigImage.tif'
+approxPixelsPerTile     = 8000 #E.g 12000, this will vary based on your ram
 
 #Options for compressing the images, ZSTD gives the best speed but LZW allows you to view the thumbnail in windows explorer
 compressOptions =       'COMPRESS=ZSTD|NUM_THREADS=ALL_CPUS|PREDICTOR=1|ZSTD_LEVEL=1|BIGTIFF=IF_SAFER|TILED=YES'
@@ -103,6 +103,11 @@ debugText = open(otherDirectory + inImageName + "Debug.txt","w+")
 debugText.write(datetime.now().strftime("%Y%m%d %H%M%S") + ": Ok let's go\n")
 debugText.close()
 
+#Clear out the confirmation files if the process has been run before
+confirmationFiles = glob.glob((otherDirectory + 'ConfirmationFiles/') + '*')
+for f in confirmationFiles:
+        os.remove(f)
+
 """
 ####################################################################################
 Gather information about the initial image
@@ -114,7 +119,6 @@ pixelSizeX = ras.rasterUnitsPerPixelX()
 pixelSizeY = ras.rasterUnitsPerPixelY()
 pixelSizeAve = (pixelSizeX + pixelSizeY) / 2
 coordinateSystem = ras.crs().authid()
-rasExtent = ras.extent()
 
 #Now set up some internal variables
 pixelSizeBig = pixelSizeAve * speedUpFactor
@@ -369,7 +373,6 @@ else:
     print("Alright let's get straight into sharpening what is already in " + processTileDirectory)
 
 
-
 """
 #############################################################################################
 #############################################################################################
@@ -411,6 +414,8 @@ for inImageTile in inImageTileFiles:
         inImageTileName = inImageTile.split("/")[-1]
         inImageTileName = inImageTileName.split(".")[0]
         
+        rasTile = QgsRasterLayer(inImageTile)
+        rasTileExtent = rasTile.extent()
 
         #Make sure that the processing folder exists
         processTileDirectory = processTileDirectoryWOutNumber + inImageTileName + '/'
@@ -486,7 +491,7 @@ for inImageTile in inImageTileFiles:
         #Confirming the bigger shadow parts as approved by shadow area B
         processing.run("qgis:rastercalculator",{'EXPRESSION':'(\"ShadowChanceC@1\"^0.2)  *  (\"ShadowChanceCSmooth@1\" ^ 0.6) * ((\"ShadowChanceBMultiplyApproval@1\" ^ 0.6)) * ' + str(shadowBoostFactor),'LAYERS':[processTileDirectory + 'ShadowChanceCSmooth.tif',processTileDirectory + 'ShadowChanceC.tif',processTileDirectory + 'ShadowChanceBMultiplyApproval.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':processTileDirectory + 'ShadowChanceCMultiply.tif'})
         #Bring out to full res
-        processing.run("gdal:warpreproject", {'INPUT':processTileDirectory + 'ShadowChanceCMultiply.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':3,'NODATA':None,'TARGET_RESOLUTION':pixelSizeAve,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory + 'ShadowBoostFinal.tif'})
+        processing.run("gdal:warpreproject", {'INPUT':processTileDirectory + 'ShadowChanceCMultiply.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':3,'NODATA':None,'TARGET_RESOLUTION':pixelSizeAve,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':rasTileExtent,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':processTileDirectory + 'ShadowBoostFinal.tif'})
         
         
         """
@@ -537,7 +542,7 @@ for inImageTile in inImageTileFiles:
 
         #Use the determined formula to figure out what difference needs to be applied to the pixels to stretch them to 0-255
         #0.85 is a factor to increase the effect of the larger radius
-        processing.run("qgis:rastercalculator", {'EXPRESSION':'((\"CombinedBands@1\" - \"MidrangeResamp@1\")*((255/(\"RangeResamp@1\"+1)))+128 - \"CombinedBands@1\") / 0.80','LAYERS':[processTileDirectory + 'CombinedBands.tif',processTileDirectory + 'MidrangeResamp.tif',processTileDirectory + 'RangeResamp.tif'],'CELLSIZE':0,'EXTENT':rasExtent,'CRS':None,'OUTPUT':processTileDirectory + 'DifferenceToApply.tif','OPTIONS': compressOptions})
+        processing.run("qgis:rastercalculator", {'EXPRESSION':'((\"CombinedBands@1\" - \"MidrangeResamp@1\")*((255/(\"RangeResamp@1\"+1)))+128 - \"CombinedBands@1\") / 0.80','LAYERS':[processTileDirectory + 'CombinedBands.tif',processTileDirectory + 'MidrangeResamp.tif',processTileDirectory + 'RangeResamp.tif'],'CELLSIZE':0,'EXTENT':rasTileExtent,'CRS':None,'OUTPUT':processTileDirectory + 'DifferenceToApply.tif','OPTIONS': compressOptions})
         
         
         """
@@ -558,7 +563,7 @@ for inImageTile in inImageTileFiles:
         Start up the non-grass task
         """
         
-        def processEachList(task, taskProcessTileDirectory, taskInImageTileName, taskInImageTile, taskRasExtent):
+        def processEachList(task, taskProcessTileDirectory, taskInImageTileName, taskInImageTile, taskRasTileExtent):
                 
             print("Applying the differences for" + taskInImageTile)
             print("Process dir" + taskProcessTileDirectory)
@@ -592,7 +597,7 @@ for inImageTile in inImageTileFiles:
 
             #Use the determined formula to figure out what difference needs to be applied to the pixels to stretch them to 0-255
             #0.85 is a factor to decrease the effect of the smaller radius
-            processing.run("qgis:rastercalculator", {'EXPRESSION':'((\"CombinedBands@1\" - \"MidrangeResampThird@1\")*((255/(\"RangeResampThird@1\"+1)))+128 - \"CombinedBands@1\") * 0.80 ','LAYERS':[taskProcessTileDirectory + 'CombinedBands.tif',taskProcessTileDirectory + 'MidrangeResampThird.tif',taskProcessTileDirectory + 'RangeResampThird.tif'],'CELLSIZE':0,'EXTENT':taskRasExtent,'CRS':None,'OUTPUT':taskProcessTileDirectory + 'DifferenceToApplyThird.tif','OPTIONS': compressOptions})
+            processing.run("qgis:rastercalculator", {'EXPRESSION':'((\"CombinedBands@1\" - \"MidrangeResampThird@1\")*((255/(\"RangeResampThird@1\"+1)))+128 - \"CombinedBands@1\") * 0.80 ','LAYERS':[taskProcessTileDirectory + 'CombinedBands.tif',taskProcessTileDirectory + 'MidrangeResampThird.tif',taskProcessTileDirectory + 'RangeResampThird.tif'],'CELLSIZE':0,'EXTENT':taskRasTileExtent,'CRS':None,'OUTPUT':taskProcessTileDirectory + 'DifferenceToApplyThird.tif','OPTIONS': compressOptions})
 
             
             """
@@ -612,15 +617,17 @@ for inImageTile in inImageTileFiles:
             #Calculate how much to pull back the pixels from clipping
             processing.run("qgis:rastercalculator", {'EXPRESSION':' ( 1.004 ^(( (\"WhiteClipByteExpandSmooth@1\" ^ 0.5) + (\"WhiteClipByteExpandSmoothThird@1\" ^ 0.5) ) * 1)) - 1','LAYERS':[taskProcessTileDirectory + 'WhiteClipByteExpandSmoothThird.tif',taskProcessTileDirectory + 'WhiteClipByteExpandSmooth.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':taskProcessTileDirectory + 'WhiteClipFactor.tif','OPTIONS':compressOptions})
             processing.run("qgis:rastercalculator", {'EXPRESSION':' ( 1.004 ^(( (\"BlackClipByteExpandSmooth@1\" ^ 0.5) + (\"BlackClipByteExpandSmoothThird@1\" ^ 0.5) ) * 1)) - 1','LAYERS':[taskProcessTileDirectory + 'BlackClipByteExpandSmoothThird.tif',taskProcessTileDirectory + 'BlackClipByteExpandSmooth.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':taskProcessTileDirectory + 'BlackClipFactor.tif','OPTIONS':compressOptions})
-            processing.run("gdal:warpreproject", {'INPUT':taskProcessTileDirectory + 'WhiteClipFactor.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':3,'NODATA':None,'TARGET_RESOLUTION':pixelSizeAve,'OPTIONS':compressOptions,'DATA_TYPE':6,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':taskProcessTileDirectory + 'WhiteClipFactorResamp.tif'})
-            processing.run("gdal:warpreproject", {'INPUT':taskProcessTileDirectory + 'BlackClipFactor.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':3,'NODATA':None,'TARGET_RESOLUTION':pixelSizeAve,'OPTIONS':compressOptions,'DATA_TYPE':6,'TARGET_EXTENT':None,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':taskProcessTileDirectory + 'BlackClipFactorResamp.tif'})
+            processing.run("gdal:warpreproject", {'INPUT':taskProcessTileDirectory + 'WhiteClipFactor.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':3,'NODATA':None,'TARGET_RESOLUTION':pixelSizeAve,'OPTIONS':compressOptions,'DATA_TYPE':6,'TARGET_EXTENT':taskRasTileExtent,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':taskProcessTileDirectory + 'WhiteClipFactorResamp.tif'})
+            processing.run("gdal:warpreproject", {'INPUT':taskProcessTileDirectory + 'BlackClipFactor.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':3,'NODATA':None,'TARGET_RESOLUTION':pixelSizeAve,'OPTIONS':compressOptions,'DATA_TYPE':6,'TARGET_EXTENT':taskRasTileExtent,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':taskProcessTileDirectory + 'BlackClipFactorResamp.tif'})
 
             
             #Apply the difference to the bands, potentially with clipping prevention
-            processing.run("qgis:rastercalculator", {'EXPRESSION':'((\"' + taskInImageTileName + '@1\" + \"ScaledBackDifference@1\")*(1- \"WhiteClipFactorResamp@1\" - \"BlackClipFactorResamp@1\"))+ (255 * ( \"BlackClipFactorResamp@1\" )) + (\"ShadowBoostFinal@1\")','LAYERS':[taskInImageTile,taskProcessTileDirectory + 'ScaledBackDifference.tif',taskProcessTileDirectory + 'WhiteClipFactorResamp.tif',taskProcessTileDirectory + 'BlackClipFactorResamp.tif',taskProcessTileDirectory + 'ShadowBoostFinal.tif'],'CELLSIZE':0,'EXTENT':taskRasExtent,'CRS':None,'OUTPUT':taskProcessTileDirectory + 'Band1Diffed.tif','OPTIONS': compressOptions})
-            processing.run("qgis:rastercalculator", {'EXPRESSION':'((\"' + taskInImageTileName + '@2\" + \"ScaledBackDifference@1\")*(1- \"WhiteClipFactorResamp@1\" - \"BlackClipFactorResamp@1\"))+ (255 * ( \"BlackClipFactorResamp@1\" )) + (\"ShadowBoostFinal@1\")','LAYERS':[taskInImageTile,taskProcessTileDirectory + 'ScaledBackDifference.tif',taskProcessTileDirectory + 'WhiteClipFactorResamp.tif',taskProcessTileDirectory + 'BlackClipFactorResamp.tif',taskProcessTileDirectory + 'ShadowBoostFinal.tif'],'CELLSIZE':0,'EXTENT':taskRasExtent,'CRS':None,'OUTPUT':taskProcessTileDirectory + 'Band2Diffed.tif','OPTIONS': compressOptions})
-            processing.run("qgis:rastercalculator", {'EXPRESSION':'((\"' + taskInImageTileName + '@3\" + \"ScaledBackDifference@1\")*(1- \"WhiteClipFactorResamp@1\" - \"BlackClipFactorResamp@1\"))+ (255 * ( \"BlackClipFactorResamp@1\" )) + (\"ShadowBoostFinal@1\")','LAYERS':[taskInImageTile,taskProcessTileDirectory + 'ScaledBackDifference.tif',taskProcessTileDirectory + 'WhiteClipFactorResamp.tif',taskProcessTileDirectory + 'BlackClipFactorResamp.tif',taskProcessTileDirectory + 'ShadowBoostFinal.tif'],'CELLSIZE':0,'EXTENT':taskRasExtent,'CRS':None,'OUTPUT':taskProcessTileDirectory + 'Band3Diffed.tif','OPTIONS': compressOptions})
-
+            processing.run("gdal:rastercalculator", {'INPUT_A':taskInImageTile,'BAND_A':1,'INPUT_B':taskProcessTileDirectory + 'ScaledBackDifference.tif','BAND_B':1,'INPUT_C':taskProcessTileDirectory + 'WhiteClipFactorResamp.tif','BAND_C':1,'INPUT_D':taskProcessTileDirectory + 'BlackClipFactorResamp.tif','BAND_D':1,'INPUT_E':taskProcessTileDirectory + 'ShadowBoostFinal.tif','BAND_E':1,
+                'FORMULA':'((A.astype(numpy.float64) + B.astype(numpy.float64))*(1- C.astype(numpy.float64) - D.astype(numpy.float64)))+ (255 * (D.astype(numpy.float64))) + (E.astype(numpy.float64))','RTYPE':1,'NO_DATA':-1,'OPTIONS':compressOptions,'EXTRA':'','OUTPUT':taskProcessTileDirectory + 'Band1Diffed.tif'})
+            processing.run("gdal:rastercalculator", {'INPUT_A':taskInImageTile,'BAND_A':2,'INPUT_B':taskProcessTileDirectory + 'ScaledBackDifference.tif','BAND_B':1,'INPUT_C':taskProcessTileDirectory + 'WhiteClipFactorResamp.tif','BAND_C':1,'INPUT_D':taskProcessTileDirectory + 'BlackClipFactorResamp.tif','BAND_D':1,'INPUT_E':taskProcessTileDirectory + 'ShadowBoostFinal.tif','BAND_E':1,
+                'FORMULA':'((A.astype(numpy.float64) + B.astype(numpy.float64))*(1- C.astype(numpy.float64) - D.astype(numpy.float64)))+ (255 * (D.astype(numpy.float64))) + (E.astype(numpy.float64))','RTYPE':1,'NO_DATA':-1,'OPTIONS':compressOptions,'EXTRA':'','OUTPUT':taskProcessTileDirectory + 'Band2Diffed.tif'})
+            processing.run("gdal:rastercalculator", {'INPUT_A':taskInImageTile,'BAND_A':3,'INPUT_B':taskProcessTileDirectory + 'ScaledBackDifference.tif','BAND_B':1,'INPUT_C':taskProcessTileDirectory + 'WhiteClipFactorResamp.tif','BAND_C':1,'INPUT_D':taskProcessTileDirectory + 'BlackClipFactorResamp.tif','BAND_D':1,'INPUT_E':taskProcessTileDirectory + 'ShadowBoostFinal.tif','BAND_E':1,
+                'FORMULA':'((A.astype(numpy.float64) + B.astype(numpy.float64))*(1- C.astype(numpy.float64) - D.astype(numpy.float64)))+ (255 * (D.astype(numpy.float64))) + (E.astype(numpy.float64))','RTYPE':1,'NO_DATA':-1,'OPTIONS':compressOptions,'EXTRA':'','OUTPUT':taskProcessTileDirectory + 'Band3Diffed.tif'})
             
             """
             ###########################################################################
@@ -638,7 +645,7 @@ for inImageTile in inImageTileFiles:
             processing.run("native:polygonstolines", {'INPUT':taskProcessTileDirectory + 'FullExtentIn.gpkg','OUTPUT':taskProcessTileDirectory + 'FullExtentInLines.gpkg'})
             
             #A raster is buffered off the lines so that has its values at 255 across most of the raster, but fades down to 0 at the edges
-            processing.run("gdal:rasterize", {'INPUT':taskProcessTileDirectory + 'FullExtentInLines.gpkg','FIELD':'','BURN':1,'UNITS':1,'WIDTH':pixelSizeX,'HEIGHT':pixelSizeY,'EXTENT':taskRasExtent,'NODATA':None,'OPTIONS':compressOptions,'DATA_TYPE':0,'INIT':None,'INVERT':False,'EXTRA':'','OUTPUT':taskProcessTileDirectory + 'FullExtentLinesRasterize.tif'})
+            processing.run("gdal:rasterize", {'INPUT':taskProcessTileDirectory + 'FullExtentInLines.gpkg','FIELD':'','BURN':1,'UNITS':1,'WIDTH':pixelSizeX,'HEIGHT':pixelSizeY,'EXTENT':taskRasTileExtent,'NODATA':None,'OPTIONS':compressOptions,'DATA_TYPE':0,'INIT':None,'INVERT':False,'EXTRA':'','OUTPUT':taskProcessTileDirectory + 'FullExtentLinesRasterize.tif'})
             processing.run("gdal:proximity", {'INPUT':taskProcessTileDirectory + 'FullExtentLinesRasterize.tif','BAND':1,'VALUES':'1','UNITS':1,'MAX_DISTANCE':64,'REPLACE':None,'NODATA':64,'OPTIONS':compressOptions,'EXTRA':'','DATA_TYPE':0,'OUTPUT':taskProcessTileDirectory + 'FullExtentLinesRasterizeDistance.tif'})
             processing.run("qgis:rastercalculator", {'EXPRESSION':'\"FullExtentLinesRasterizeDistance@1\" * 4','LAYERS':[taskProcessTileDirectory + 'FullExtentLinesRasterizeDistance.tif'],'CELLSIZE':0,'EXTENT':None,'CRS':None,'OUTPUT':taskProcessTileDirectory + 'AlphaBand.tif','OPTIONS': compressOptions})
             
@@ -657,13 +664,10 @@ for inImageTile in inImageTileFiles:
             print("Final value clipping and exporting...")
 
             #Clip values to within 0 and 255
-            processing.run("gdal:warpreproject", {'INPUT':taskProcessTileDirectory + 'Band1Diffed.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':0,'NODATA':None,'TARGET_RESOLUTION':None,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':taskRasExtent,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':taskProcessTileDirectory + 'Band1DiffedByte.tif'})
-            processing.run("gdal:warpreproject", {'INPUT':taskProcessTileDirectory + 'Band2Diffed.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':0,'NODATA':None,'TARGET_RESOLUTION':None,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':taskRasExtent,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':taskProcessTileDirectory + 'Band2DiffedByte.tif'})
-            processing.run("gdal:warpreproject", {'INPUT':taskProcessTileDirectory + 'Band3Diffed.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':0,'NODATA':None,'TARGET_RESOLUTION':None,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':taskRasExtent,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':taskProcessTileDirectory + 'Band3DiffedByte.tif'})
-            processing.run("gdal:warpreproject", {'INPUT':taskProcessTileDirectory + 'AlphaBand.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':0,'NODATA':None,'TARGET_RESOLUTION':None,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':taskRasExtent,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':taskProcessTileDirectory + 'AlphaBandByte.tif'})
+            processing.run("gdal:warpreproject", {'INPUT':taskProcessTileDirectory + 'AlphaBand.tif','SOURCE_CRS':None,'TARGET_CRS':None,'RESAMPLING':0,'NODATA':None,'TARGET_RESOLUTION':None,'OPTIONS':compressOptions,'DATA_TYPE':1,'TARGET_EXTENT':taskRasTileExtent,'TARGET_EXTENT_CRS':None,'MULTITHREADING':True,'EXTRA':gdalOptions,'OUTPUT':taskProcessTileDirectory + 'AlphaBandByte.tif'})
 
             #Bring the bands together
-            processing.run("gdal:buildvirtualraster", {'INPUT':[taskProcessTileDirectory + 'Band1DiffedByte.tif',taskProcessTileDirectory + 'Band2DiffedByte.tif',taskProcessTileDirectory + 'Band3DiffedByte.tif',taskProcessTileDirectory + 'AlphaBandByte.tif'],'RESOLUTION':2,'SEPARATE':True,'PROJ_DIFFERENCE':True,'ADD_ALPHA':False,'ASSIGN_CRS':None,'RESAMPLING':0,'SRC_NODATA':'','EXTRA':'','OUTPUT':taskProcessTileDirectory + 'Band123A.vrt'})
+            processing.run("gdal:buildvirtualraster", {'INPUT':[taskProcessTileDirectory + 'Band1Diffed.tif',taskProcessTileDirectory + 'Band2Diffed.tif',taskProcessTileDirectory + 'Band3Diffed.tif',taskProcessTileDirectory + 'AlphaBandByte.tif'],'RESOLUTION':2,'SEPARATE':True,'PROJ_DIFFERENCE':True,'ADD_ALPHA':False,'ASSIGN_CRS':None,'RESAMPLING':0,'SRC_NODATA':'','EXTRA':'','OUTPUT':taskProcessTileDirectory + 'Band123A.vrt'})
 
             #Determine where must be clipped to, given the bigger pixels won't line up with the smaller pixels
             processing.run("native:polygonfromlayerextent", {'INPUT':taskProcessTileDirectory + 'ReducedResRed.tif','ROUND_TO':0,'OUTPUT':taskProcessTileDirectory + 'ReducedResExtent.gpkg'})
@@ -706,7 +710,7 @@ for inImageTile in inImageTileFiles:
 
         print("About to run the task for " + inImageTileName)
         #Assign the functions to a Qgs task and run
-        beyondGrassTask = QgsTask.fromFunction(inImageTile + 'FirstOne', processEachList, processTileDirectory, inImageTileName, inImageTile, rasExtent)
+        beyondGrassTask = QgsTask.fromFunction(inImageTile + 'FirstOne', processEachList, processTileDirectory, inImageTileName, inImageTile, rasTileExtent)
         
         #Make sure that it is not until the final run through of the loop that next part of the process runs
         QgsApplication.taskManager().addTask(beyondGrassTask)
@@ -714,6 +718,11 @@ for inImageTile in inImageTileFiles:
     except BaseException as e:
         print("Bro it failed " + inImageTileName)
         print(e)
+        
+        confirmationText = open(otherDirectory + 'ConfirmationFiles/' + taskInImageTileName + "Confirmation.txt","w+")
+        confirmationText.write(inImageTileName + ' failed. See debug.')
+        confirmationText.close()
+        
         debugText = open(otherDirectory + inImageName + "Debug.txt","a+")
         debugText.write(datetime.now().strftime("%Y%m%d %H%M%S") + ": So " + inImageTileName + ' failed to process. Error message is ' + str(e) + '. Currently there are ' + str(QgsApplication.taskManager().countActiveTasks()) + ' tasks running. Free memory is ' + str(round(psutil.virtual_memory().free / 1000000000,1)) + 'gb. \n')
         debugText.close()
@@ -732,13 +741,12 @@ while numberOfTilesDone < len(inImageTileFiles):
     confirmationFiles = glob.glob(otherDirectory + 'ConfirmationFiles/' + '*.txt')
     numberOfTilesDone = len(confirmationFiles)
     debugText = open(otherDirectory + inImageName + "Debug.txt","a+")
-    debugText.write(str(numberOfTilesDone) + ' tiles done. ' + str(len(inImageTileFiles)) + ' total tiles. The time is ' + datetime.now().strftime("%Y%m%d %H%M%S"))
+    debugText.write(str(numberOfTilesDone) + ' tiles done. ' + str(len(inImageTileFiles)) + ' total tiles. The time is ' + datetime.now().strftime("%Y%m%d %H%M%S") + '. ')
     debugText.close()
     
     time.sleep(5)
     
     
-
 
 print("Ok so there are still " + str(QgsApplication.taskManager().countActiveTasks()) + " tasks running before the merge")
 
