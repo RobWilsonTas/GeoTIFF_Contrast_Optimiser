@@ -12,8 +12,8 @@ User options for the tiling section
 """
 
 #Initial variable assignment
-inImage                 = 'C:/Temp/Yourimage.tif' #E.g 'C:/Temp/BigImage.tif'
-approxPixelsPerTile     = 8000 #E.g 12000, this will vary based on your ram
+inImage                 = 'C:/Temp/YourImage.tif' #E.g 'C:/Temp/BigImage.tif'
+approxPixelsPerTile     = 12000 #E.g 12000, this will vary based on your ram
 
 #Options for compressing the images, ZSTD gives the best speed but LZW allows you to view the thumbnail in windows explorer
 compressOptions =       'COMPRESS=ZSTD|NUM_THREADS=ALL_CPUS|PREDICTOR=1|ZSTD_LEVEL=1|BIGTIFF=IF_SAFER|TILED=YES'
@@ -27,7 +27,7 @@ User options for the sharpening section (common values for speedUp and radius: 6
 """
 
 
-speedUpFactor               = 6 #Between 1 and 1000, recommended is perhaps 6 to start off with  
+speedUpFactor               = 8 #Between 1 and 1000, recommended is perhaps 6 to start off with  
 #This reduces the raster resolution for determining minimum and maximum values
 #If the speed up factor is too high, it will overlook smaller bright/dark sections and clip their values
 #If the speed up factor is too low, it can be too granular/zealous in preventing pixel value clipping, 
@@ -54,8 +54,9 @@ clippingPreventionFactor    = 0.05 #Between 0 and 0.9, recommended is 0.05
 
 shadowBoostWidthMetres      = 12.0 #Must be larger than approximately 3 times the pixel size times the speed up factor
 #This sets a very approximate minimum width of the shadowed areas to be boosted
+#If this is significantly larger than the radiusMetres then it will take a long time
 
-shadowBoostFactor           = 0.2 #Between 0 and 1, recommended is 0.4
+shadowBoostFactor           = 0.3 #Between 0 and 1, recommended is 0.3
 
 
 #Keep in mind this script only adjusts brightnesses. A tinted image will affect results.
@@ -196,7 +197,7 @@ if promptReply == QMessageBox.Yes:
     blueMin = getStats(processDirectory + inImageName + 'BlueStats.html')[1]
 
     #Check to see if anything is a bit sus
-    if abs(redMean - greenMean) + abs(redMean - blueMean) + abs(blueMean - greenMean) > 20 or abs(redMin - greenMin) + abs(redMin - blueMin) + abs(blueMin - greenMin) > 30:
+    if abs(redMean - greenMean) + abs(redMean - blueMean) + abs(blueMean - greenMean) > 25 or abs(redMin - greenMin) + abs(redMin - blueMin) + abs(blueMin - greenMin) > 40:
         promptReply = QMessageBox.question(iface.mainWindow(), 'Check the RGB values',"Your image may have a significant tint.\nRGB mean is " + str(redMean) + ', ' + str(greenMean) + ', ' + str(blueMean) + '.\nRGB min is ' + str(redMin) + ', ' + str(greenMin) + ', ' + str(blueMin) + '.\nDo you wish to continue?', QMessageBox.Yes, QMessageBox.No)
         if promptReply == QMessageBox.No:
             alrightLetsNotContinueThen
@@ -719,7 +720,7 @@ for inImageTile in inImageTileFiles:
         print("Bro it failed " + inImageTileName)
         print(e)
         
-        confirmationText = open(otherDirectory + 'ConfirmationFiles/' + taskInImageTileName + "Confirmation.txt","w+")
+        confirmationText = open(otherDirectory + 'ConfirmationFiles/' + inImageTileName + "Confirmation.txt","w+")
         confirmationText.write(inImageTileName + ' failed. See debug.')
         confirmationText.close()
         
