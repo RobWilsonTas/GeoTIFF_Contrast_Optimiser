@@ -13,7 +13,7 @@ User options for the tiling section
 
 #Initial variable assignment
 inImage                 = 'C:/Temp/YourImage.tif' #E.g 'C:/Temp/BigImage.tif'
-approxPixelsPerTile     = 12000 #E.g 12000, this will vary based on your ram
+approxPixelsPerTile     = 12000 #E.g 12000, this should be adjusted based on your ram
 
 #Options for compressing the images, ZSTD gives the best speed but LZW allows you to view the thumbnail in windows explorer
 compressOptions =       'COMPRESS=ZSTD|NUM_THREADS=ALL_CPUS|PREDICTOR=1|ZSTD_LEVEL=1|BIGTIFF=IF_SAFER|TILED=YES'
@@ -27,14 +27,14 @@ User options for the sharpening section (common values for speedUp and radius: 6
 """
 
 
-speedUpFactor               = 8 #Between 1 and 1000, recommended is perhaps 6 to start off with  
+speedUpFactor               = 6 #Between 1 and 1000, recommended is perhaps 6 to start off with  
 #This reduces the raster resolution for determining minimum and maximum values
 #If the speed up factor is too high, it will overlook smaller bright/dark sections and clip their values
 #If the speed up factor is too low, it can be too granular/zealous in preventing pixel value clipping, 
 #Plus it can make processing times very long (keep an eye on the console output for this)
 #Though as long as it isn't below 5 it likely won't be a real issue on performance
 
-radiusMetres                = 30 #At least 3 times greater than the original pixel size, also must be an integer
+radiusMetres                = 10 #At least 3 times greater than the original pixel size, also must be an integer
 #This parameter has a strong effect on the output
 #A smaller radius creates more extreme, spatially variable contrast enhancement
 #A larger radius is a more gentle, broader brush
@@ -52,7 +52,7 @@ clippingPreventionFactor    = 0.05 #Between 0 and 0.9, recommended is 0.05
 #If the full stretch of pixels is getting stretched too far into complete blackness/whiteness,
 #despite a low speed up factor, then you can increase this value a little
 
-shadowBoostWidthMetres      = 12.0 #Must be larger than approximately 3 times the pixel size times the speed up factor
+shadowBoostWidthMetres      = 4.0 #Must be larger than approximately 3 times the pixel size times the speed up factor
 #This sets a very approximate minimum width of the shadowed areas to be boosted
 #If this is significantly larger than the radiusMetres then it will take a long time
 
@@ -164,7 +164,7 @@ First check to make sure there isn't a significant tint, then prep for tiling
 
 #Let's see if tiling needs to be done 
 #You won't need to do tiling if the tif is less than about 10000x10000 or if the tiling has been done previously
-promptReply = QMessageBox.question(iface.mainWindow(), 'Does the raster need splitting up?', "Do you need to perform tiling?\n\nIf you don't, make sure that all the tifs are in " + processTileDirectory + " before you click no\n\nIf you do, tiling will be performed on " + inImage + " when you click yes", QMessageBox.Yes, QMessageBox.No)
+promptReply = QMessageBox.question(iface.mainWindow(), 'Does the raster need splitting up?', "If tiling has not yet been completed you will need to do tiling.\n\nDo you need to perform tiling?\n\nIf you don't, make sure that all the tifs are ready to go in " + processTileDirectory + " before you click no\n\nIf you do need to perform tiling, tiling will be performed on " + inImage + " when you click yes", QMessageBox.Yes, QMessageBox.No)
 if promptReply == QMessageBox.Yes:
     
     
@@ -197,7 +197,7 @@ if promptReply == QMessageBox.Yes:
     blueMin = getStats(processDirectory + inImageName + 'BlueStats.html')[1]
 
     #Check to see if anything is a bit sus
-    if abs(redMean - greenMean) + abs(redMean - blueMean) + abs(blueMean - greenMean) > 25 or abs(redMin - greenMin) + abs(redMin - blueMin) + abs(blueMin - greenMin) > 40:
+    if abs(redMean - greenMean) + abs(redMean - blueMean) + abs(blueMean - greenMean) > 30 or abs(redMin - greenMin) + abs(redMin - blueMin) + abs(blueMin - greenMin) > 40:
         promptReply = QMessageBox.question(iface.mainWindow(), 'Check the RGB values',"Your image may have a significant tint.\nRGB mean is " + str(redMean) + ', ' + str(greenMean) + ', ' + str(blueMean) + '.\nRGB min is ' + str(redMin) + ', ' + str(greenMin) + ', ' + str(blueMin) + '.\nDo you wish to continue?', QMessageBox.Yes, QMessageBox.No)
         if promptReply == QMessageBox.No:
             alrightLetsNotContinueThen
@@ -542,7 +542,7 @@ for inImageTile in inImageTileFiles:
         
 
         #Use the determined formula to figure out what difference needs to be applied to the pixels to stretch them to 0-255
-        #0.85 is a factor to increase the effect of the larger radius
+        #0.80 is a factor to increase the effect of the larger radius
         processing.run("qgis:rastercalculator", {'EXPRESSION':'((\"CombinedBands@1\" - \"MidrangeResamp@1\")*((255/(\"RangeResamp@1\"+1)))+128 - \"CombinedBands@1\") / 0.80','LAYERS':[processTileDirectory + 'CombinedBands.tif',processTileDirectory + 'MidrangeResamp.tif',processTileDirectory + 'RangeResamp.tif'],'CELLSIZE':0,'EXTENT':rasTileExtent,'CRS':None,'OUTPUT':processTileDirectory + 'DifferenceToApply.tif','OPTIONS': compressOptions})
         
         
@@ -597,7 +597,7 @@ for inImageTile in inImageTileFiles:
             
 
             #Use the determined formula to figure out what difference needs to be applied to the pixels to stretch them to 0-255
-            #0.85 is a factor to decrease the effect of the smaller radius
+            #0.80 is a factor to decrease the effect of the smaller radius
             processing.run("qgis:rastercalculator", {'EXPRESSION':'((\"CombinedBands@1\" - \"MidrangeResampThird@1\")*((255/(\"RangeResampThird@1\"+1)))+128 - \"CombinedBands@1\") * 0.80 ','LAYERS':[taskProcessTileDirectory + 'CombinedBands.tif',taskProcessTileDirectory + 'MidrangeResampThird.tif',taskProcessTileDirectory + 'RangeResampThird.tif'],'CELLSIZE':0,'EXTENT':taskRasTileExtent,'CRS':None,'OUTPUT':taskProcessTileDirectory + 'DifferenceToApplyThird.tif','OPTIONS': compressOptions})
 
             
