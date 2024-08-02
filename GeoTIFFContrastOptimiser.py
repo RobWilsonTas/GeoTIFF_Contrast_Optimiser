@@ -13,12 +13,12 @@ User options for the tiling section
 
 #Initial variable assignment
 inImage                 = 'C:/Temp/YourImage.tif' #E.g 'C:/Temp/BigImage.tif'
-approxPixelsPerTile     = 12000 #E.g 12000, this should be adjusted based on your ram
+approxPixelsPerTile     = 8000 #E.g 12000, this should be adjusted based on your ram
 
 #Options for compressing the images, ZSTD gives the best speed but LZW allows you to view the thumbnail in windows explorer
 compressOptions =       'COMPRESS=ZSTD|NUM_THREADS=ALL_CPUS|PREDICTOR=1|ZSTD_LEVEL=1|BIGTIFF=IF_SAFER|TILED=YES'
 finalCompressOptions =  'COMPRESS=LZW|PREDICTOR=2|NUM_THREADS=ALL_CPUS|BIGTIFF=IF_SAFER|TILED=YES'
-gdalOptions =           '--config GDAL_NUM_THREADS ALL_CPUS -overwrite'
+gdalOptions =           ''
 
 
 """
@@ -34,7 +34,7 @@ speedUpFactor               = 6 #Between 1 and 1000, recommended is perhaps 6 to
 #Plus it can make processing times very long (keep an eye on the console output for this)
 #Though as long as it isn't below 5 it likely won't be a real issue on performance
 
-radiusMetres                = 10 #At least 3 times greater than the original pixel size, also must be an integer
+radiusMetres                = 30 #At least 3 times greater than the original pixel size, also must be an integer
 #This parameter has a strong effect on the output
 #A smaller radius creates more extreme, spatially variable contrast enhancement
 #A larger radius is a more gentle, broader brush
@@ -52,7 +52,7 @@ clippingPreventionFactor    = 0.05 #Between 0 and 0.9, recommended is 0.05
 #If the full stretch of pixels is getting stretched too far into complete blackness/whiteness,
 #despite a low speed up factor, then you can increase this value a little
 
-shadowBoostWidthMetres      = 4.0 #Must be larger than approximately 3 times the pixel size times the speed up factor
+shadowBoostWidthMetres      = 30.0 #Must be larger than approximately 3 times the pixel size times the speed up factor
 #This sets a very approximate minimum width of the shadowed areas to be boosted
 #If this is significantly larger than the radiusMetres then it will take a long time
 
@@ -444,7 +444,7 @@ for inImageTile in inImageTileFiles:
         print("Initial processing")
 
         #Combine the bands to determine a total brightness
-        processing.run("gdal:rastercalculator", {'INPUT_A': inImageTile ,'BAND_A':1,'INPUT_B':inImageTile,'BAND_B':2,'INPUT_C':inImageTile,'BAND_C':3,'INPUT_D':inImageTile,'BAND_D':4,'FORMULA':'(D>128)*(((A.astype(numpy.float64))+(B.astype(numpy.float64))+(C.astype(numpy.float64)))/3)+((D<129)*(-1))','RTYPE':1,'NO_DATA':-1,'OPTIONS':compressOptions,'EXTRA':'','OUTPUT':processTileDirectory + 'CombinedBands.tif'})
+        processing.run("gdal:rastercalculator", {'INPUT_A': inImageTile ,'BAND_A':1,'INPUT_B':inImageTile,'BAND_B':2,'INPUT_C':inImageTile,'BAND_C':3,'INPUT_D':inImageTile,'BAND_D':4,'FORMULA':'(D>128)*(((A.astype(numpy.float64))+(B.astype(numpy.float64))+(C.astype(numpy.float64)))/3)+((D < 129)*(-1))','RTYPE':1,'NO_DATA':-1,'OPTIONS':compressOptions,'EXTRA':'','OUTPUT':processTileDirectory + 'CombinedBands.tif'})
         
         #Reduce res for quicker processing
         processing.run("gdal:translate", {'INPUT':inImageTile,'TARGET_CRS':None,'NODATA':None,'COPY_SUBDATASETS':False,'OPTIONS':compressOptions,'EXTRA':'-r cubic -tr ' + str(pixelSizeBig) + ' ' + str(pixelSizeBig) + ' -b 1','DATA_TYPE':0,'OUTPUT':processTileDirectory + 'ReducedResRed.tif'})
@@ -812,5 +812,4 @@ print("The final tasks (making a thumbnail, histogram and pyramids) will continu
 """
 #######################################################################
 """
-
 
